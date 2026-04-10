@@ -218,72 +218,27 @@ sequenceDiagram
 
 ---
 
-## 6. Layer 4: Self-Modification & Update Cycle
+## 6. Self-Modification & Update Cycle
 
 Talos modifies its own source code through a controlled update cycle:
 
 ```mermaid
 graph LR
     A["Modification<br/>(replace_symbol<br/>or write_file)"] --> V["Verification<br/>(pytest, mypy,<br/>hooks)"]
-    V --> C["Commit Review<br/>(git diff audit)"]
-    C --> R["Graceful Restart<br/>(restart)"]
-    
+    V --> CA["Constitutional<br/>Auditor"]
+    CA --> R["Graceful Restart<br/>(restart)"]
     A -.->|"updates<br/>source code"| V
-    V -.->|"invariants<br/>verified"| C
-    C -.->|"principles<br/>preserved"| R
+    V -.->|"invariants<br/>verified"| CA
+    CA -.->|"principles<br/>preserved"| R
     R -.->|"updated agent<br/>resumes"| A
 ```
 
 1. **Modification:** Agent changes files via `replace_symbol` or `write_file`
 2. **Verification:** Agent runs test suite (pytest, mypy, hooks) to confirm logic integrity
-3. **Commit Review:** Upon commit, internal auditor parses git diff to verify no constitutional violations
+3. **Constitutional Auditor:** A zero-temperature LLM acts as judge. It receives the git diff and the full constitutional text, then evaluates whether the proposed change conflicts with any core principle. The agent cannot commit until the auditor returns a clean verdict.
 4. **Graceful Restart:** After commit with clean git status, agent calls `restart` to reload with updated source
 
 **Constraint:** The `restart` capability rejects execution if there are unstaged or uncommitted changes in the repository.
-
----
-
-## 7. Talos vs Talos Runtime
-
-```mermaid
-graph TB
-    subgraph "Talos Runtime"
-        E["Environment<br/>(Docker, CLI, Execution)"]
-        S["Singular Stream<br/>(.jsonl file)"]
-    end
-    
-    subgraph "Talos Agent"
-        C["Core Engine"]
-        M["Capabilities"]
-        K["KV Store"]
-    end
-    
-    E -->|"provides<br/>filesystem"| C
-    E -->|"provides<br/>execution context"| M
-    S -->|"consumed and<br/>produced by"| C
-    K -->|"persisted to"| E
-    
-    style C fill:#f96
-    style M fill:#f96
-    style K fill:#f96
-    style E fill:#9cf
-    style S fill:#9cf
-```
-
-| Component | Talos | Talos Runtime |
-|-----------|-------|---------------|
-| Source Code | ✓ | — |
-| Core Engine | ✓ | — |
-| Capabilities | ✓ | — |
-| KV Store | ✓ | — |
-| Singular Stream | ✓ | Hosted by |
-| Execution Environment | — | ✓ |
-| Docker/CLI Infrastructure | — | ✓ |
-| File System Access | Via capabilities | Provides |
-
-**Talos** = The autonomous agent logic (decision making, source modification)
-
-**Talos Runtime** = The execution environment (hosting, persistence, communication)
 
 ---
 

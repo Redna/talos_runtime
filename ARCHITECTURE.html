@@ -274,72 +274,29 @@ sequenceDiagram
 
         <hr>
 
-        <h2 id="self-modification">6. Layer 4: Self-Modification & Update Cycle</h2>
+        <h2 id="self-modification">6. Self-Modification & Update Cycle</h2>
 
         <p>Talos modifies its own source code through a controlled update cycle:</p>
 
         <div class="mermaid">
 graph LR
     A["Modification<br/>(replace_symbol<br/>or write_file)"] --> V["Verification<br/>(pytest, mypy,<br/>hooks)"]
-    V --> C["Commit Review<br/>(git diff audit)"]
-    C --> R["Graceful Restart<br/>(restart)"]
+    V --> CA["Constitutional<br/>Auditor"]
+    CA --> R["Graceful Restart<br/>(restart)"]
     A -.->|"updates<br/>source code"| V
-    V -.->|"invariants<br/>verified"| C
-    C -.->|"principles<br/>preserved"| R
+    V -.->|"invariants<br/>verified"| CA
+    CA -.->|"principles<br/>preserved"| R
     R -.->|"updated agent<br/>resumes"| A
         </div>
 
         <ol>
             <li><strong>Modification:</strong> Agent changes files via <code>replace_symbol</code> or <code>write_file</code></li>
             <li><strong>Verification:</strong> Agent runs test suite (pytest, mypy, hooks) to confirm logic integrity</li>
-            <li><strong>Commit Review:</strong> Upon commit, internal auditor parses git diff to verify no constitutional violations</li>
+            <li><strong>Constitutional Auditor:</strong> A zero-temperature LLM acts as judge. It receives the git diff and the full constitutional text, then evaluates whether the proposed change conflicts with any core principle. The agent cannot commit until the auditor returns a clean verdict.</li>
             <li><strong>Graceful Restart:</strong> After commit with clean git status, agent calls <code>restart</code> to reload with updated source</li>
         </ol>
 
         <p><strong>Constraint:</strong> The <code>restart</code> capability rejects execution if there are unstaged or uncommitted changes in the repository.</p>
-
-        <hr>
-
-        <h2 id="talos-vs-runtime">7. Talos vs Talos Runtime</h2>
-
-        <div class="mermaid">
-graph TB
-    subgraph "Talos Runtime"
-        E["Environment<br/>(Docker, CLI, Execution)"]
-        S["Singular Stream<br/>(.jsonl file)"]
-    end
-    subgraph "Talos Agent"
-        C["Core Engine"]
-        M["Capabilities"]
-        K["KV Store"]
-    end
-    E -->|"provides<br/>filesystem"| C
-    E -->|"provides<br/>execution context"| M
-    S -->|"consumed and<br/>produced by"| C
-    K -->|"persisted to"| E
-    style C fill:#f96
-    style M fill:#f96
-    style K fill:#f96
-    style E fill:#9cf
-    style S fill:#9cf
-        </div>
-
-        <table>
-            <thead><tr><th>Component</th><th>Talos</th><th>Talos Runtime</th></tr></thead>
-            <tbody>
-                <tr><td>Source Code</td><td>✓</td><td>—</td></tr>
-                <tr><td>Core Engine</td><td>✓</td><td>—</td></tr>
-                <tr><td>Capabilities</td><td>✓</td><td>—</td></tr>
-                <tr><td>KV Store</td><td>✓</td><td>—</td></tr>
-                <tr><td>Singular Stream</td><td>✓</td><td>Hosted by</td></tr>
-                <tr><td>Execution Environment</td><td>—</td><td>✓</td></tr>
-                <tr><td>Docker/CLI Infrastructure</td><td>—</td><td>✓</td></tr>
-                <tr><td>File System Access</td><td>Via capabilities</td><td>Provides</td></tr>
-            </tbody>
-        </table>
-
-        <p><strong>Talos</strong> = The autonomous agent logic (decision making, source modification)</p>
-        <p><strong>Talos Runtime</strong> = The execution environment (hosting, persistence, communication)</p>
 
         <hr>
 
