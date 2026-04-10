@@ -21,7 +21,6 @@
         h1 { font-size: 2.5rem; color: #58a6ff; margin-bottom: 0.5rem; }
         h2 { color: #58a6ff; font-size: 1.75rem; margin: 2rem 0 1rem; padding-bottom: 0.5rem; border-bottom: 1px solid #21262d; }
         h3 { color: #f0883e; font-size: 1.25rem; margin: 1.5rem 0 0.75rem; }
-        h4 { color: #d2a8ff; font-size: 1rem; margin: 1rem 0 0.5rem; }
         p { margin-bottom: 1rem; }
         code { background: #161b22; padding: 0.2em 0.4em; border-radius: 3px; font-size: 0.9em; }
         pre { background: #161b22; border: 1px solid #30363d; border-radius: 6px; padding: 1rem; overflow-x: auto; margin: 1rem 0; }
@@ -38,6 +37,7 @@
         ul { margin: 1rem 0 1rem 1.5rem; }
         li { margin-bottom: 0.5rem; }
         .diagram-box { background: #161b22; border: 1px solid #30363d; border-radius: 6px; padding: 1.5rem; margin: 1rem 0; font-family: monospace; white-space: pre; overflow-x: auto; }
+        .warning-box { background: #161b22; border-left: 3px solid #f0883e; padding: 1rem; margin: 1rem 0; }
     </style>
 </head>
 <body>
@@ -99,6 +99,22 @@ graph LR
             <li>All communication occurs via string-based message passing through the singular stream</li>
         </ul>
 
+        <h3 id="frozen-stream-invariant">2.3 The Frozen Stream Invariant</h3>
+
+        <div class="warning-box">
+            <strong>No dynamic elements may be appended to the Singular Stream at runtime.</strong>
+        </div>
+
+        <p>This is a strict anti-pattern. The Singular Stream is a frozen, append-only cache. Adding dynamic content — timestamps that update, token counts that change, state that mutates — invalidates the cache and breaks continuity. Every piece of state that is not the fixed identity documents must live either:</p>
+
+        <ul>
+            <li>In the <strong>KV store</strong> (persistent, queryable)</li>
+            <li>In <strong>environment files</strong> (<code>/memory/agenda.md</code>, <code>.jsonl</code> archives)</li>
+            <li>In the <strong>HUD</strong> (piggybacked onto tool outputs, not as independent turns)</li>
+        </ul>
+
+        <p>The stream is never modified after archival. The only things appended are new turns from the agent and user.</p>
+
         <hr>
 
         <h2 id="stream-state-history">3. Layer 1: The Stream (State & History)</h2>
@@ -123,7 +139,14 @@ graph LR
 
         <h3 id="5-turn-hd-window">3.2 The 5-Turn High-Definition Window &amp; Archival</h3>
 
-        <p>To prevent token exhaustion without breaking continuity, Talos keeps the last 5 turns at full fidelity. At turn N, the stream looks like this:</p>
+        <p>To prevent token exhaustion without breaking continuity, Talos keeps the last 5 turns at full fidelity. This design serves two purposes:</p>
+
+        <ol>
+            <li><strong>Sharpness:</strong> The agent must stay aware of what is currently happening — it cannot rely on older context being retained.</li>
+            <li><strong>External State:</strong> The truncation pressure forces the agent to store important state in the KV store or task files, not in the context window.</li>
+        </ol>
+
+        <p>At turn N, the stream looks like this:</p>
 
         <div class="diagram-box">┌────────────────────────────────────────────────────────────────┐
 │  Turn N-5    │  Turn N-4    │  Turn N-3    │  Turn N-2    │  Turn N-1    │  Turn N     │
@@ -140,14 +163,15 @@ graph LR
 
         <div class="diagram-box">Turn N-6 (archived) →
   ├─ [REASONING: stripped]
-  ├─ [TOOL PARAMETERS: stripped]
+  ├─ [TOOL PARAMETERS: stripped]  ← e.g., entire write_file content
   ├─ [TOOL OUTPUT: truncated → "... 500 lines archived ..."]
   └─ [RETAINED: turn label + task outcome summary only]</div>
 
         <p>This preserves a lightweight trace for auditability while freeing token budget.</p>
 
-        <h3 id="persistent-status-indicator">3.3 The Persistent Status Indicator</h3>
-        <p>Instead of injecting transient telemetry on every turn, Talos appends a status indicator to the most recent tool response only when specific events occur.</p>
+        <h3 id="piggyback-hud">3.3 The Piggyback HUD</h3>
+
+        <p>The HUD is not injected as a separate turn — it is appended to the last tool output as a lightweight status piggyback. This gives the agent a sensation of its current state without polluting the stream with redundant telemetry on every turn.</p>
 
         <p><strong>Format:</strong></p>
         <pre><code>[Context: X% | Turn: Y | Time: Z] [SYSTEM: Event Description]</code></pre>
@@ -160,7 +184,7 @@ graph LR
             <li>Processing errors</li>
         </ul>
 
-        <p>The indicator is physically written to the stream, maintaining a complete audit trail of system reactions.</p>
+        <p>The HUD is appended only when one of these events occurs, keeping the stream clean during normal operation.</p>
 
         <hr>
 
@@ -171,24 +195,15 @@ graph LR
         <h3 id="active-focus">4.1 The Active Focus</h3>
         <p>The Core Engine tracks exactly one string: <code>current_focus</code>.</p>
 
-        <div class="mermaid">
-graph LR
-    C["Core Engine"] -->|"current_focus<br/>single string"| F["Active Focus"]
-    B["Task Backlog<br/>/memory/agenda.md"] -->|"on-demand<br/>retrieval"| C
-        </div>
-
         <ul>
             <li>Future tasks reside in the environment (e.g., <code>/memory/agenda.md</code>)</li>
             <li>Focus is managed via <code>set_focus</code> (begin new goal) and <code>resolve_focus</code> (complete goal with synthesis)</li>
         </ul>
 
-        <h3 id="structured-memory-store">4.2 The Structured Memory Store (KV)</h3>
-        <p>A persistent key-value store for long-term facts, architectural rules, and learned patterns.</p>
-
-        <p><strong>Zero Auto-Injection:</strong> The system prompt shows only a lightweight summary:</p>
-        <pre><code>[Memory: 42 keys | Last 3: database_schema, telegram_flow, ast_rules]</code></pre>
-
-        <p>Capabilities requiring memory details explicitly retrieve them via dedicated tools.</p>
+        <h3 id="hud-memory-summary">4.2 The HUD Memory Summary</h3>
+        <p>The HUD displays a memory summary as part of its status line, not the system prompt:</p>
+        <pre><code>[HUD | Context: X% | Turn: Y | Queue: Z | Memory: 42 keys | Last 3: database_schema, telegram_flow, ast_rules]</code></pre>
+        <p>The KV store contents are never injected into the system prompt. Memory details are retrieved on-demand via capabilities when needed.</p>
 
         <hr>
 

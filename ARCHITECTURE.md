@@ -51,6 +51,18 @@ graph LR
 - Capabilities never modify the Core Engine's internal variables
 - All communication occurs via string-based message passing through the singular stream
 
+### 2.3 The Frozen Stream Invariant
+
+**No dynamic elements may be appended to the Singular Stream at runtime.**
+
+This is a strict anti-pattern. The Singular Stream is a frozen, append-only cache. Adding dynamic content (timestamps that update, token counts that change, state that mutates) invalidates the cache and breaks continuity. Every piece of state that is not the fixed identity documents must live either:
+
+- In the KV store (persistent, queryable)
+- In environment files (`/memory/agenda.md`, `.jsonl` archives)
+- In the HUD (piggybacked onto tool outputs, not as independent turns)
+
+The stream is never modified after archival. The only things appended are new turns from the agent and user.
+
 ---
 
 ## 3. Layer 1: The Stream (State & History)
@@ -76,7 +88,12 @@ graph LR
 
 ### 3.2 The 5-Turn High-Definition Window & Archival
 
-To prevent token exhaustion without breaking continuity, Talos keeps the last 5 turns at full fidelity. At turn N, the stream looks like this:
+To prevent token exhaustion without breaking continuity, Talos keeps the last 5 turns at full fidelity. This design serves two purposes:
+
+1. **Sharpness:** The agent must stay aware of what is currently happening — it cannot rely on older context being retained.
+2. **External State:** The truncation pressure forces the agent to store important state in the KV store or task files, not in the context window.
+
+At turn N, the stream looks like this:
 
 ```
 ┌────────────────────────────────────────────────────────────────┐
@@ -96,16 +113,16 @@ To prevent token exhaustion without breaking continuity, Talos keeps the last 5 
 ```
 Turn N-6 (archived) →
   ├─ [REASONING: stripped]
-  ├─ [TOOL PARAMETERS: stripped]
+  ├─ [TOOL PARAMETERS: stripped]  ← e.g., entire write_file content
   ├─ [TOOL OUTPUT: truncated → "... 500 lines archived ..."]
   └─ [RETAINED: turn label + task outcome summary only]
 ```
 
 This preserves a lightweight trace for auditability while freeing token budget.
 
-### 3.3 The Persistent Status Indicator
+### 3.3 The Piggyback HUD
 
-Instead of injecting transient telemetry on every turn, Talos appends a status indicator to the most recent tool response only when specific events occur.
+The HUD is not injected as a separate turn — it is appended to the last tool output as a lightweight status piggyback. This gives the agent a sensation of its current state without polluting the stream with redundant telemetry on every turn.
 
 **Format:**
 ```
@@ -118,7 +135,7 @@ Instead of injecting transient telemetry on every turn, Talos appends a status i
 - External messages from creator
 - Processing errors
 
-The indicator is physically written to the stream, maintaining a complete audit trail of system reactions.
+The HUD is appended only when one of these events occurs, keeping the stream clean during normal operation.
 
 ---
 
@@ -130,25 +147,17 @@ Talos does not maintain complex task arrays or large memory dictionaries in the 
 
 The Core Engine tracks exactly one string: `current_focus`.
 
-```mermaid
-graph LR
-    C["Core Engine"] -->|"current_focus<br/>single string"| F["Active Focus"]
-    B["Task Backlog<br/>/memory/agenda.md"] -->|"on-demand<br/>retrieval"| C
-```
-
 - Future tasks reside in the environment (e.g., `/memory/agenda.md`)
 - Focus is managed via `set_focus` (begin new goal) and `resolve_focus` (complete goal with synthesis)
 
-### 4.2 The Structured Memory Store (KV)
+### 4.2 The HUD Memory Summary
 
-A persistent key-value store for long-term facts, architectural rules, and learned patterns.
-
-**Zero Auto-Injection:** The system prompt shows only a lightweight summary:
+The HUD displays a memory summary as part of its status line, not the system prompt:
 ```
-[Memory: 42 keys | Last 3: database_schema, telegram_flow, ast_rules]
+[HUD | Context: X% | Turn: Y | Queue: Z | Memory: 42 keys | Last 3: database_schema, telegram_flow, ast_rules]
 ```
 
-Capabilities requiring memory details explicitly retrieve them via dedicated tools.
+The KV store contents are never injected into the system prompt. Memory details are retrieved on-demand via capabilities when needed.
 
 ---
 
