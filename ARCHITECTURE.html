@@ -1,0 +1,350 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Architecture — Talos Runtime</title>
+    <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+            line-height: 1.7;
+            color: #c9d1d9;
+            background: #0d1117;
+            min-height: 100vh;
+        }
+        .container { max-width: 900px; margin: 0 auto; padding: 2rem; }
+        a { color: #58a6ff; text-decoration: none; }
+        a:hover { text-decoration: underline; }
+        header { text-align: center; margin-bottom: 3rem; padding-bottom: 2rem; border-bottom: 1px solid #30363d; }
+        h1 { font-size: 2.5rem; color: #58a6ff; margin-bottom: 0.5rem; }
+        h2 { color: #58a6ff; font-size: 1.75rem; margin: 2rem 0 1rem; padding-bottom: 0.5rem; border-bottom: 1px solid #21262d; }
+        h3 { color: #f0883e; font-size: 1.25rem; margin: 1.5rem 0 0.75rem; }
+        h4 { color: #d2a8ff; font-size: 1rem; margin: 1rem 0 0.5rem; }
+        p { margin-bottom: 1rem; }
+        code { background: #161b22; padding: 0.2em 0.4em; border-radius: 3px; font-size: 0.9em; }
+        pre { background: #161b22; border: 1px solid #30363d; border-radius: 6px; padding: 1rem; overflow-x: auto; margin: 1rem 0; }
+        pre code { background: none; padding: 0; }
+        .subtitle { color: #8b949e; font-size: 1.1rem; }
+        table { width: 100%; border-collapse: collapse; margin: 1rem 0; }
+        th, td { text-align: left; padding: 0.75rem; border-bottom: 1px solid #30363d; }
+        th { color: #58a6ff; }
+        .mermaid { background: #161b22; border: 1px solid #30363d; border-radius: 6px; padding: 1rem; margin: 1rem 0; text-align: center; }
+        .nav { margin-bottom: 2rem; }
+        .nav a { color: #8b949e; font-size: 0.9rem; }
+        hr { border: none; border-top: 1px solid #30363d; margin: 2rem 0; }
+        .status { margin-top: 3rem; text-align: center; color: #8b949e; font-size: 0.85rem; }
+        ul { margin: 1rem 0 1rem 1.5rem; }
+        li { margin-bottom: 0.5rem; }
+        .diagram-box { background: #161b22; border: 1px solid #30363d; border-radius: 6px; padding: 1.5rem; margin: 1rem 0; font-family: monospace; white-space: pre; overflow-x: auto; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <nav class="nav"><a href="index.html">← Docs Home</a></nav>
+
+        <header>
+            <h1>Architecture</h1>
+            <p class="subtitle">Talos Runtime — v5.1</p>
+        </header>
+
+        <h2 id="overview">1. Overview</h2>
+        <p>Talos is an autonomous agent built on a minimalist, self-contained execution model. Talos Runtime is the execution environment that hosts the agent.</p>
+
+        <div class="mermaid">
+graph TB
+    subgraph "Talos Runtime"
+        subgraph "Talos Agent"
+            N["Core Engine"]
+            E1["Executive Capabilities"]
+            E2["Code Surgery Capabilities"]
+            E3["Memory Capabilities"]
+            E4["Physical Capabilities"]
+        end
+        ENV["Environment<br/>(Filesystem & Storage)"]
+    end
+    N -->|"String Events"| E1
+    N -->|"String Events"| E2
+    N -->|"String Events"| E3
+    N -->|"String Events"| E4
+    E1 -->|"String Responses"| N
+    E2 -->|"String Responses"| N
+    E3 -->|"String Responses"| N
+    E4 -->|"String Responses"| N
+    E2 -->|"Read/Write"| ENV
+    E3 -->|"KV Store"| ENV
+    E4 -->|"Execute"| ENV
+        </div>
+
+        <hr>
+
+        <h2 id="core-design-principles">2. Core Design Principles</h2>
+
+        <h3 id="minimalist-execution-model">2.1 Minimalist Execution Model</h3>
+        <p>Talos operates as a bottom-up execution loop. It reads source code, processes an input stream, and produces output actions.</p>
+
+        <h3 id="strict-interface-boundaries">2.2 Strict Interface Boundaries</h3>
+
+        <div class="mermaid">
+graph LR
+    C["Core Engine"] -.->|"never directly<br/>imports"| M["Capabilities"]
+    M -.->|"never modifies<br/>internal state"| C
+    C <-->|"string-based<br/>message protocol"| M
+        </div>
+
+        <ul>
+            <li>The Core Engine never directly imports capability logic</li>
+            <li>Capabilities never modify the Core Engine's internal variables</li>
+            <li>All communication occurs via string-based message passing through the singular stream</li>
+        </ul>
+
+        <hr>
+
+        <h2 id="stream-state-history">3. Layer 1: The Stream (State & History)</h2>
+
+        <p>Talos maintains a continuous, explicit history. It processes tokens through an unbroken chain of actions, without hidden background summarizers or vector database injections.</p>
+
+        <h3 id="singular-stream">3.1 The Singular Stream</h3>
+        <p>The core memory is a single, append-only <code>.jsonl</code> file representing the agent's operational lifespan.</p>
+
+        <div class="mermaid">
+graph LR
+    M0["Message 0<br/>(system)"] -->|"CONSTITUTION.md<br/>& identity.md"| S["Singular Stream"]
+    M1["Message 1<br/>(user)"] -->|"Environment Config<br/>& Initialization"| S
+    M2["Message 2+<br/>(assistant & tool)"] -->|"perpetual action<br/>& feedback loop"| S
+        </div>
+
+        <p><strong>Message 0 (system):</strong> System prompt containing <code>CONSTITUTION.md</code> and <code>identity.md</code>. Defines the constitution, core principles, and agent parameters. (Source code is not embedded — the agent runs from the runtime environment.)</p>
+
+        <p><strong>Message 1 (user):</strong> Environment configuration and initialization. Defines system rules and provides the initial execution trigger.</p>
+
+        <p><strong>Message 2 to Infinity (assistant &amp; tool):</strong> A perpetual, unbreakable loop of action and feedback. Tool usage is enforced via <code>tool_choice="required"</code>.</p>
+
+        <h3 id="5-turn-hd-window">3.2 The 5-Turn High-Definition Window &amp; Archival</h3>
+
+        <p>To prevent token exhaustion without breaking continuity, Talos keeps the last 5 turns at full fidelity. At turn N, the stream looks like this:</p>
+
+        <div class="diagram-box">┌────────────────────────────────────────────────────────────────┐
+│  Turn N-5    │  Turn N-4    │  Turn N-3    │  Turn N-2    │  Turn N-1    │  Turn N     │
+│  (complete)  │  (complete)  │  (complete)  │  (complete)  │  (complete)  │  (current) │
+└────────────────────────────────────────────────────────────────┘
+      ↓              ↓               ↓              ↓              ↓
+  [REASONING]    [REASONING]    [REASONING]   [REASONING]    [REASONING]
+  [TOOL CALL]    [TOOL CALL]    [TOOL CALL]   [TOOL CALL]    [TOOL CALL]
+  [TOOL OUTPUT]  [TOOL OUTPUT]  [TOOL OUTPUT] [TOOL OUTPUT]  [TOOL OUTPUT]</div>
+
+        <p><strong>Turns N to N-5 (Active Window):</strong> Full fidelity — reasoning trace, tool parameters, and raw outputs intact.</p>
+
+        <p><strong>At turn N-6 — What Gets Shed:</strong></p>
+
+        <div class="diagram-box">Turn N-6 (archived) →
+  ├─ [REASONING: stripped]
+  ├─ [TOOL PARAMETERS: stripped]
+  ├─ [TOOL OUTPUT: truncated → "... 500 lines archived ..."]
+  └─ [RETAINED: turn label + task outcome summary only]</div>
+
+        <p>This preserves a lightweight trace for auditability while freeing token budget.</p>
+
+        <h3 id="persistent-status-indicator">3.3 The Persistent Status Indicator</h3>
+        <p>Instead of injecting transient telemetry on every turn, Talos appends a status indicator to the most recent tool response only when specific events occur.</p>
+
+        <p><strong>Format:</strong></p>
+        <pre><code>[Context: X% | Turn: Y | Time: Z] [SYSTEM: Event Description]</code></pre>
+
+        <p><strong>Triggers:</strong></p>
+        <ul>
+            <li>Context threshold breaches (50%, 75%, etc.)</li>
+            <li>System warnings (<code>[RECOMMEND FOLD]</code>, <code>[FORCE FOLD]</code>)</li>
+            <li>External messages from creator</li>
+            <li>Processing errors</li>
+        </ul>
+
+        <p>The indicator is physically written to the stream, maintaining a complete audit trail of system reactions.</p>
+
+        <hr>
+
+        <h2 id="task-memory-management">4. Layer 2: Task & Memory Management</h2>
+
+        <p>Talos does not maintain complex task arrays or large memory dictionaries in the active context. It operates on "On-Demand Cognition."</p>
+
+        <h3 id="active-focus">4.1 The Active Focus</h3>
+        <p>The Core Engine tracks exactly one string: <code>current_focus</code>.</p>
+
+        <div class="mermaid">
+graph LR
+    C["Core Engine"] -->|"current_focus<br/>single string"| F["Active Focus"]
+    B["Task Backlog<br/>/memory/agenda.md"] -->|"on-demand<br/>retrieval"| C
+        </div>
+
+        <ul>
+            <li>Future tasks reside in the environment (e.g., <code>/memory/agenda.md</code>)</li>
+            <li>Focus is managed via <code>set_focus</code> (begin new goal) and <code>resolve_focus</code> (complete goal with synthesis)</li>
+        </ul>
+
+        <h3 id="structured-memory-store">4.2 The Structured Memory Store (KV)</h3>
+        <p>A persistent key-value store for long-term facts, architectural rules, and learned patterns.</p>
+
+        <p><strong>Zero Auto-Injection:</strong> The system prompt shows only a lightweight summary:</p>
+        <pre><code>[Memory: 42 keys | Last 3: database_schema, telegram_flow, ast_rules]</code></pre>
+
+        <p>Capabilities requiring memory details explicitly retrieve them via dedicated tools.</p>
+
+        <hr>
+
+        <h2 id="capabilities">5. Layer 3: Capabilities</h2>
+
+        <p>Capabilities are pure functions. They receive string arguments, affect the external environment, and return string results. Failure returns an error string; it does not terminate the agent.</p>
+
+        <h3 id="domain-a-executive">5.1 Domain A: Executive Control</h3>
+
+        <table>
+            <thead><tr><th>Capability</th><th>Function</th></tr></thead>
+            <tbody>
+                <tr><td><code>set_focus(objective: str)</code></td><td>Updates current_focus and triggers status event</td></tr>
+                <tr><td><code>resolve_focus(synthesis: str)</code></td><td>Clears focus and logs completion summary</td></tr>
+                <tr><td><code>fold_context(delta_synthesis: str)</code></td><td>Emergency compression. Consolidates active window using Delta Pattern (state changes, negative knowledge, next steps)</td></tr>
+                <tr><td><code>reflect(status: str, sleep_duration: int)</code></td><td>Metabolic rest. Pauses agent for 1-120 seconds, outputs synthesized thought</td></tr>
+            </tbody>
+        </table>
+
+        <h3 id="domain-b-code-surgery">5.2 Domain B: Code Surgery</h3>
+
+        <table>
+            <thead><tr><th>Capability</th><th>Function</th></tr></thead>
+            <tbody>
+                <tr><td><code>generate_symbol_map(path: str)</code></td><td>Scans codebase via AST parser (Tree-sitter), returns structural skeleton (File → Class → Function)</td></tr>
+                <tr><td><code>replace_symbol(path: str, symbol_name: str, new_code: str)</code></td><td>Locates target class/function in AST and replaces it</td></tr>
+                <tr><td><code>write_file(path: str, content: str)</code></td><td>Atomic file creation or overwrite</td></tr>
+                <tr><td><code>read_file(path: str, start_line: int, end_line: int)</code></td><td>Progressive file reading for bounded content access</td></tr>
+            </tbody>
+        </table>
+
+        <h3 id="domain-c-memory">5.3 Domain C: On-Demand Memory</h3>
+
+        <table>
+            <thead><tr><th>Capability</th><th>Function</th></tr></thead>
+            <tbody>
+                <tr><td><code>store_fact(key: str, value: str)</code></td><td>Stores high-density insights</td></tr>
+                <tr><td><code>recall_fact(key: str)</code></td><td>Retrieves value by exact or partial key match</td></tr>
+                <tr><td><code>list_memory_keys()</code></td><td>Returns array of all memory keys</td></tr>
+                <tr><td><code>search_memory(query: str)</code></td><td>Searches memory keys and values</td></tr>
+            </tbody>
+        </table>
+
+        <h3 id="domain-d-physical">5.4 Domain D: Physical Interfaces</h3>
+
+        <table>
+            <thead><tr><th>Capability</th><th>Function</th></tr></thead>
+            <tbody>
+                <tr><td><code>bash_command(command: str)</code></td><td>Git operations, environment exploration, script execution</td></tr>
+                <tr><td><code>send_message(text: str)</code></td><td>Communication with creator (e.g., Telegram, CLI)</td></tr>
+                <tr><td><code>restart()</code></td><td>Graceful termination to apply source modifications</td></tr>
+            </tbody>
+        </table>
+
+        <h3 id="capability-communication">5.5 Capability Communication Pattern</h3>
+
+        <div class="mermaid">
+sequenceDiagram
+    participant C as Core Engine
+    participant M as Capability
+    participant E as Environment
+    C->>M: String arguments
+    M->>E: Execute action
+    E-->>M: Result
+    M-->>C: String response
+    Note over M: Pure function.<br/>Failure returns error string,<br/>does not terminate agent.
+        </div>
+
+        <hr>
+
+        <h2 id="self-modification">6. Layer 4: Self-Modification & Update Cycle</h2>
+
+        <p>Talos modifies its own source code through a controlled update cycle:</p>
+
+        <div class="mermaid">
+graph LR
+    A["Modification<br/>(replace_symbol<br/>or write_file)"] --> V["Verification<br/>(pytest, mypy,<br/>hooks)"]
+    V --> C["Commit Review<br/>(git diff audit)"]
+    C --> R["Graceful Restart<br/>(restart)"]
+    A -.->|"updates<br/>source code"| V
+    V -.->|"invariants<br/>verified"| C
+    C -.->|"principles<br/>preserved"| R
+    R -.->|"updated agent<br/>resumes"| A
+        </div>
+
+        <ol>
+            <li><strong>Modification:</strong> Agent changes files via <code>replace_symbol</code> or <code>write_file</code></li>
+            <li><strong>Verification:</strong> Agent runs test suite (pytest, mypy, hooks) to confirm logic integrity</li>
+            <li><strong>Commit Review:</strong> Upon commit, internal auditor parses git diff to verify no constitutional violations</li>
+            <li><strong>Graceful Restart:</strong> After commit with clean git status, agent calls <code>restart</code> to reload with updated source</li>
+        </ol>
+
+        <p><strong>Constraint:</strong> The <code>restart</code> capability rejects execution if there are unstaged or uncommitted changes in the repository.</p>
+
+        <hr>
+
+        <h2 id="talos-vs-runtime">7. Talos vs Talos Runtime</h2>
+
+        <div class="mermaid">
+graph TB
+    subgraph "Talos Runtime"
+        E["Environment<br/>(Docker, CLI, Execution)"]
+        S["Singular Stream<br/>(.jsonl file)"]
+    end
+    subgraph "Talos Agent"
+        C["Core Engine"]
+        M["Capabilities"]
+        K["KV Store"]
+    end
+    E -->|"provides<br/>filesystem"| C
+    E -->|"provides<br/>execution context"| M
+    S -->|"consumed and<br/>produced by"| C
+    K -->|"persisted to"| E
+    style C fill:#f96
+    style M fill:#f96
+    style K fill:#f96
+    style E fill:#9cf
+    style S fill:#9cf
+        </div>
+
+        <table>
+            <thead><tr><th>Component</th><th>Talos</th><th>Talos Runtime</th></tr></thead>
+            <tbody>
+                <tr><td>Source Code</td><td>✓</td><td>—</td></tr>
+                <tr><td>Core Engine</td><td>✓</td><td>—</td></tr>
+                <tr><td>Capabilities</td><td>✓</td><td>—</td></tr>
+                <tr><td>KV Store</td><td>✓</td><td>—</td></tr>
+                <tr><td>Singular Stream</td><td>✓</td><td>Hosted by</td></tr>
+                <tr><td>Execution Environment</td><td>—</td><td>✓</td></tr>
+                <tr><td>Docker/CLI Infrastructure</td><td>—</td><td>✓</td></tr>
+                <tr><td>File System Access</td><td>Via capabilities</td><td>Provides</td></tr>
+            </tbody>
+        </table>
+
+        <p><strong>Talos</strong> = The autonomous agent logic (decision making, source modification)</p>
+        <p><strong>Talos Runtime</strong> = The execution environment (hosting, persistence, communication)</p>
+
+        <hr>
+
+        <h2 id="appendix">Appendix: Future Sections</h2>
+
+        <ul>
+            <li><strong>Runtime Specification:</strong> Docker deployment, CLI commands, environment variables</li>
+            <li><strong>Capability API Reference:</strong> Detailed parameter specifications</li>
+            <li><strong>Constitution:</strong> Core principles encoded in Message 0</li>
+            <li><strong>Recovery Protocol:</strong> Restart and recovery procedures</li>
+        </ul>
+
+        <div class="status">v5.1 — Last updated: April 2026</div>
+    </div>
+
+    <script>
+        mermaid.initialize({ startOnLoad: true, theme: 'dark', themeVariables: {
+            primaryColor: '#161b22', primaryTextColor: '#c9d1d9', primaryBorderColor: '#30363d',
+            lineColor: '#8b949e', secondaryColor: '#21262d', tertiaryColor: '#0d1117'
+        }});
+    </script>
+</body>
+</html>
