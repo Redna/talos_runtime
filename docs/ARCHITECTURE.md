@@ -2,240 +2,230 @@
 
 ## 1. Overview
 
+Talos is an autonomous agent built on a minimalist, self-contained execution model. Talos Runtime is the execution environment that hosts the agent.
+
 ```mermaid
 graph TB
     subgraph "Talos Runtime"
-        subgraph "Talos Cell"
-            N["Nucleus<br/>(Core Engine)"]
-            O1["Executive Organelles"]
-            O2["Code Surgery Organelles"]
-            O3["Memory Organelles"]
-            O4["Physical Organelles"]
+        subgraph "Talos Agent"
+            N["Core Engine"]
+            E1["Executive Capabilities"]
+            E2["Code Surgery Capabilities"]
+            E3["Memory Capabilities"]
+            E4["Physical Capabilities"]
         end
-        E["Environment<br/>(Filesystem & Memory)"]
+        ENV["Environment<br/>(Filesystem & Storage)"]
     end
     
-    N -->|"String Stream"| O1
-    N -->|"String Stream"| O2
-    N -->|"String Stream"| O3
-    N -->|"String Stream"| O4
-    O1 -->|"Chemical Signals"| N
-    O2 -->|"Chemical Signals"| N
-    O3 -->|"Chemical Signals"| N
-    O4 -->|"Chemical Signals"| N
-    O2 -->|"Read/Write"| E
-    O3 -->|"KV Store"| E
-    O4 -->|"Execute"| E
+    N -->|"String Events"| E1
+    N -->|"String Events"| E2
+    N -->|"String Events"| E3
+    N -->|"String Events"| E4
+    E1 -->|"String Responses"| N
+    E2 -->|"String Responses"| N
+    E3 -->|"String Responses"| N
+    E4 -->|"String Responses"| N
+    E2 -->|"Read/Write"| ENV
+    E3 -->|"KV Store"| ENV
+    E4 -->|"Execute"| ENV
 ```
-
-**Talos** is the autonomous agent (the cell). **Talos Runtime** is the execution environment that hosts the cell.
 
 ---
 
-## 2. Core Philosophy: The Digital Microorganism
+## 2. Core Design Principles
 
-Talos operates bottom-up, functioning not as a traditional Operating System, but as a digital microorganism. It survives, reacts to stimuli, and mutates its own DNA (source code) through a minimalist, self-contained cellular structure.
+### 2.1 Minimalist Execution Model
 
-### 2.1 The Nucleus (Core Engine)
+Talos operates as a bottom-up execution loop. It reads source code, processes an input stream, and produces output actions.
 
-A near-stateless execution loop. It simply reads the current DNA, processes the environmental stream, and triggers the next cellular action.
-
-### 2.2 The Organelles (Capabilities)
-
-Isolated, specialized tools that interact with the physical environment or edit the cell's structure.
-
-### 2.3 The Environment (Filesystem & Memory)
-
-The external world where long-term knowledge, plans, and the physical codebase reside.
-
-### 2.4 Strict Boundary Interfaces
+### 2.2 Strict Interface Boundaries
 
 ```mermaid
 graph LR
-    N["Nucleus"] -.->|"never imports"| O["Organelles"]
-    O -.->|"never modifies"| N
-    N <-->|"string serialized<br/>chemical signals"| O
+    C["Core Engine"] -.->|"never directly<br/>imports"| M["Capabilities"]
+    M -.->|"never modifies<br/>internal state"| C
+    C <-->|"string-based<br/>message protocol"| M
 ```
 
-- The Nucleus never directly imports organelle logic
-- Organelles never modify the Nucleus's internal variables
-- Communication occurs entirely via chemical signals—strings serialized into the singular stream
+- The Core Engine never directly imports capability logic
+- Capabilities never modify the Core Engine's internal variables
+- All communication occurs via string-based message passing through the singular stream
 
 ---
 
-## 3. Layer 1: The Substrate (Metabolism & State)
+## 3. Layer 1: The Stream (State & History)
 
-Talos relies on a continuous, explicit history. It metabolizes tokens through an unbroken chain of actions, rejecting hidden background summarizers or vector database injections.
+Talos maintains a continuous, explicit history. It processes tokens through an unbroken chain of actions, without hidden background summarizers or vector database injections.
 
 ### 3.1 The Singular Stream
 
-The core memory is a single, append-only `.jsonl` file representing the cell's lifespan.
+The core memory is a single, append-only `.jsonl` file representing the agent's operational lifespan.
 
 ```mermaid
 graph LR
-    M0["Message 0<br/>(system)"] -->|"DNA & Identity"| S["Singular Stream"]
-    M1["Message 1<br/>(user)"] -->|"Environmental Physics<br/>& Kick-off"| S
-    M2["Message 2+<br/>(assistant & tool)"] -->|"perpetual loop<br/>action & feedback"| S
+    M0["Message 0<br/>(system)"] -->|"Source Code<br/>& Identity"| S["Singular Stream"]
+    M1["Message 1<br/>(user)"] -->|"Environment Config<br/>& Initialization"| S
+    M2["Message 2+<br/>(assistant & tool)"] -->|"perpetual action<br/>& feedback loop"| S
 ```
 
-**Message 0 (system):** The DNA and Identity. Defines the constitution, core principles, and the nature of the entity.
+**Message 0 (system):** Source code and identity. Defines the constitution, core principles, and agent parameters.
 
-**Message 1 (user):** The Environmental Physics & Kick-off. Defines the physical rules of the system and provides the initial spark for execution.
+**Message 1 (user):** Environment configuration and initialization. Defines system rules and provides the initial execution trigger.
 
-**Message 2 to Infinity (assistant & tool):** A perpetual, unbreakable loop of action and feedback. The Nucleus is forced to act via `tool_choice="required"`.
+**Message 2 to Infinity (assistant & tool):** A perpetual, unbreakable loop of action and feedback. Tool usage is enforced via `tool_choice="required"`.
 
-### 3.2 The 5-Turn High-Definition (HD) Window & Shedding
+### 3.2 The 5-Turn High-Definition Window & Archival
 
-To prevent token exhaustion without breaking continuity, Talos applies a continuous "shedding" wave exactly 5 turns behind the cutting edge:
+To prevent token exhaustion without breaking continuity, Talos applies an archival process exactly 5 turns behind the cutting edge:
 
 ```mermaid
 graph TB
-    subgraph "HD Window"
+    subgraph "Active Window (HD)"
         N5["Turn N-5"] --> N4["Turn N-4"] --> N3["Turn N-3"] --> N2["Turn N-2"] --> N1["Turn N-1"] --> N0["Turn N"]
     end
-    subgraph "Archived Trace"
+    subgraph "Archived"
         O1["Turn N-6"] --> O2["Turn N-7"] --> O3["Turn N-8"] --> O4["..."] --> O5["Archive"]
     end
     
-    N0 -.->|"cutting edge"| N5
-    N5 -.->|"shedding wave<br/>5 turns back"| O1
+    N0 -.->|"current<br/>turn"| N5
+    N5 -.->|"archival wave<br/>5 turns back"| O1
 ```
 
-**Turns N to N-5 (HD Window):** Perfect recall. Contains full internal reasoning and raw tool inputs/outputs.
+**Turns N to N-5 (Active Window):** Full fidelity. Contains complete reasoning traces and raw tool inputs/outputs.
 
-**Turns N-6+ (Archived Trace):** Heavy payloads are surgically stripped:
+**Turns N-6+ (Archived):** Content is stripped:
 - Large file reads become `(... 500 lines archived ...)`
-- Huge bash outputs become `[SYSTEM LOG: Historical output truncated]`
-- Internal reasoning is deleted entirely, leaving a lightweight evolutionary trace that can be folded
+- Large command outputs become `[SYSTEM LOG: Historical output truncated]`
+- Internal reasoning is removed, leaving a lightweight trace suitable for compression
 
-### 3.3 The Persistent, Event-Driven HUD
+### 3.3 The Persistent Status Indicator
 
-Instead of injecting transient telemetry on every turn (which clutters the context window), Talos uses a Persistent HUD that is appended to the *content of the most recent tool response* only when specific stimuli occur.
+Instead of injecting transient telemetry on every turn, Talos appends a status indicator to the most recent tool response only when specific events occur.
 
 **Format:**
 ```
-[Context: X% | Turn: Y | Time: Z] [SYSTEM: Stimulus Description]
+[Context: X% | Turn: Y | Time: Z] [SYSTEM: Event Description]
 ```
 
 **Triggers:**
 - Context threshold breaches (50%, 75%, etc.)
-- System warnings (`[RECOMMENDED FOLD]`, `[FORCE FOLD]`)
-- External creator messages
-- Metabolic errors
+- System warnings (`[RECOMMEND FOLD]`, `[FORCE FOLD]`)
+- External messages from creator
+- Processing errors
 
-Because the HUD is physically written to the stream during events, Talos maintains a perfect ledger of exactly *why* it reacted the way it did.
+The indicator is physically written to the stream, maintaining a complete audit trail of system reactions.
 
 ---
 
-## 4. Layer 2: Task & Memory Management (Cognition)
+## 4. Layer 2: Task & Memory Management
 
-Talos does not hold complex arrays of upcoming tasks or giant dictionaries of memory keys in its active context prompt. It operates on "On-Demand Cognition."
+Talos does not maintain complex task arrays or large memory dictionaries in the active context. It operates on "On-Demand Cognition."
 
 ### 4.1 The Active Focus
 
-The Nucleus tracks exactly one string: `current_focus`.
+The Core Engine tracks exactly one string: `current_focus`.
 
 ```mermaid
 graph LR
-    N["Nucleus"] -->|"current_focus<br/>single string"| F["Active Focus"]
-    B["Backlog<br/>/memory/agenda.md"] -->|"on-demand<br/>retrieval"| N
+    C["Core Engine"] -->|"current_focus<br/>single string"| F["Active Focus"]
+    B["Task Backlog<br/>/memory/agenda.md"] -->|"on-demand<br/>retrieval"| C
 ```
 
-- The backlog of future tasks lives purely in the environment (e.g., `/memory/agenda.md`)
-- Talos manages its state via executive organelles: `set_focus` (to take on a new goal) and `resolve_focus` (to clear the goal and log a synthesis)
+- Future tasks reside in the environment (e.g., `/memory/agenda.md`)
+- Focus is managed via `set_focus` (begin new goal) and `resolve_focus` (complete goal with synthesis)
 
 ### 4.2 The Structured Memory Store (KV)
 
-A physical key-value store for retaining long-term facts, architectural rules, and learned patterns.
+A persistent key-value store for long-term facts, architectural rules, and learned patterns.
 
-**Zero Auto-Injection:** The system prompt only shows a lightweight summary:
+**Zero Auto-Injection:** The system prompt shows only a lightweight summary:
 ```
 [Memory: 42 keys | Last 3: database_schema, telegram_flow, ast_rules]
 ```
 
-If Talos needs details, it explicitly uses its memory organelles to list keys or retrieve specific data.
+Capabilities requiring memory details explicitly retrieve them via dedicated tools.
 
 ---
 
-## 5. Layer 3: Capabilities (Organelles)
+## 5. Layer 3: Capabilities
 
-Organelles are pure functions. They take string arguments from the LLM, affect the external world, and return string results. If an organelle fails, it returns an error string; it does not kill the cell.
+Capabilities are pure functions. They receive string arguments, affect the external environment, and return string results. Failure returns an error string; it does not terminate the agent.
 
-### 5.1 Domain A: Executive Control (Logical)
+### 5.1 Domain A: Executive Control
 
-| Organelle | Purpose |
-|-----------|---------|
-| `set_focus(objective: str)` | Updates the cell's current_focus and triggers a HUD event |
-| `resolve_focus(synthesis: str)` | Clears the focus and logs a high-density "Autopsy" of what was achieved |
-| `fold_context(delta_synthesis: str)` | Emergency compression tool. Compresses the HD stream into a single anchor block using the Delta Pattern (State changes, Negative Knowledge, Next steps) |
-| `reflect(status: str, sleep_duration: int)` | No-op/metabolic rest tool. Allows the model to pause, output a synthesized thought, and force the cell to sleep for 1-120 seconds |
+| Capability | Function |
+|------------|----------|
+| `set_focus(objective: str)` | Updates current_focus and triggers status event |
+| `resolve_focus(synthesis: str)` | Clears focus and logs completion summary |
+| `fold_context(delta_synthesis: str)` | Emergency compression. Consolidates active window using Delta Pattern (state changes, negative knowledge, next steps) |
+| `reflect(status: str, sleep_duration: int)` | Metabolic rest. Pauses agent for 1-120 seconds, outputs synthesized thought |
 
-### 5.2 Domain B: Code Surgery (Structural Mutation)
+### 5.2 Domain B: Code Surgery
 
-| Organelle | Purpose |
-|-----------|---------|
-| `generate_symbol_map(path: str)` | Scans the codebase using an AST parser (Tree-sitter) and returns a structural skeleton (File → Class → Function) |
-| `replace_symbol(path: str, symbol_name: str, new_code: str)` | Surgical laser. Finds a target class/function in the AST and replaces it byte-for-byte |
-| `write_file(path: str, content: str)` | Atomic creation or complete overwrite of files |
-| `read_file(path: str, start_line: int, end_line: int)` | Progressive reading to examine DNA or documentation without breaching context limits |
+| Capability | Function |
+|------------|----------|
+| `generate_symbol_map(path: str)` | Scans codebase via AST parser (Tree-sitter), returns structural skeleton (File → Class → Function) |
+| `replace_symbol(path: str, symbol_name: str, new_code: str)` | Locates target class/function in AST and replaces it |
+| `write_file(path: str, content: str)` | Atomic file creation or overwrite |
+| `read_file(path: str, start_line: int, end_line: int)` | Progressive file reading for bounded content access |
 
-### 5.3 Domain C: On-Demand Memory (KV)
+### 5.3 Domain C: On-Demand Memory
 
-| Organelle | Purpose |
-|-----------|---------|
-| `store_fact(key: str, value: str)` | Saves high-density insights |
-| `recall_fact(key: str)` | Retrieves a value by exact or partial key match |
-| `list_memory_keys()` | Returns a complete array of currently known memory keys |
-| `search_memory(query: str)` | Grep-style search over memory keys and values |
+| Capability | Function |
+|------------|----------|
+| `store_fact(key: str, value: str)` | Stores high-density insights |
+| `recall_fact(key: str)` | Retrieves value by exact or partial key match |
+| `list_memory_keys()` | Returns array of all memory keys |
+| `search_memory(query: str)` | Searches memory keys and values |
 
-### 5.4 Domain D: Physical Interfaces & Environment
+### 5.4 Domain D: Physical Interfaces
 
-| Organelle | Purpose |
-|-----------|---------|
-| `bash_command(command: str)` | Universal appendage for git, environment exploration, and running scripts |
-| `send_message(text: str)` | Communication with the creator (e.g., via Telegram/CLI) |
-| `restart()` | Signals a graceful restart of the cellular loop to apply structural mutations |
+| Capability | Function |
+|------------|----------|
+| `bash_command(command: str)` | Git operations, environment exploration, script execution |
+| `send_message(text: str)` | Communication with creator (e.g., Telegram, CLI) |
+| `restart()` | Graceful termination to apply source modifications |
 
-### 5.5 Organelle Communication Pattern
+### 5.5 Capability Communication Pattern
 
 ```mermaid
 sequenceDiagram
-    participant N as Nucleus
-    participant O as Organelle
+    participant C as Core Engine
+    participant M as Capability
     participant E as Environment
     
-    N->>O: String arguments
-    O->>E: Execute action
-    E-->>O: Result
-    O-->>N: String response (error or success)
+    C->>M: String arguments
+    M->>E: Execute action
+    E-->>M: Result
+    M-->>C: String response
     
-    Note over O: Pure function.<br/>Failure returns error string,<br/>does not kill cell.
+    Note over M: Pure function.<br/>Failure returns error string,<br/>does not terminate agent.
 ```
 
 ---
 
-## 6. Layer 4: Evolution & Cellular Division
+## 6. Layer 4: Self-Modification & Update Cycle
 
-Talos mutates and evolves by rewriting its own DNA. To ensure stability during this process, Talos follows a strict internal validation sequence before completing a mutation cycle:
+Talos modifies its own source code through a controlled update cycle:
 
 ```mermaid
 graph LR
-    M["Mutation<br/>(replace_symbol<br/>or write_file)"] --> V["Verification<br/>(pytest, mypy,<br/>hooks)"]
-    V --> C["Commit Auditor<br/>(git diff review)"]
-    C --> R["Graceful Restart<br/>(restart tool)"]
+    A["Modification<br/>(replace_symbol<br/>or write_file)"] --> V["Verification<br/>(pytest, mypy,<br/>hooks)"]
+    V --> C["Commit Review<br/>(git diff audit)"]
+    C --> R["Graceful Restart<br/>(restart)"]
     
-    M -.->|"mutates DNA<br/>source code"| V
-    V -.->|"invariants hold"| C
+    A -.->|"updates<br/>source code"| V
+    V -.->|"invariants<br/>verified"| C
     C -.->|"principles<br/>preserved"| R
-    R -.->|"new cell<br/>evolved"| M
+    R -.->|"updated agent<br/>resumes"| A
 ```
 
-1. **Mutation:** Talos modifies a file using `replace_symbol` or `write_file`
-2. **Verification (Pre-Commit):** Talos runs a suite of hooks (e.g., pytest, mypy) to ensure logic invariants hold
-3. **Commit Auditor:** Upon triggering a git commit, an internal Commit Auditor automatically parses the git diff to ensure no constitutional principles were violated by the mutation
-4. **Graceful Restart:** Once changes are committed and the git status is perfectly clean, Talos uses the `restart` tool to terminate the current execution loop
+1. **Modification:** Agent changes files via `replace_symbol` or `write_file`
+2. **Verification:** Agent runs test suite (pytest, mypy, hooks) to confirm logic integrity
+3. **Commit Review:** Upon commit, internal auditor parses git diff to verify no constitutional violations
+4. **Graceful Restart:** After commit with clean git status, agent calls `restart` to reload with updated source
 
-**Constraint:** The `restart` tool will automatically reject the action and fail if there are unstaged or uncommitted changes in the git repository.
+**Constraint:** The `restart` capability rejects execution if there are unstaged or uncommitted changes in the repository.
 
 ---
 
@@ -248,19 +238,19 @@ graph TB
         S["Singular Stream<br/>(.jsonl file)"]
     end
     
-    subgraph "Talos Cell"
-        N["Nucleus"]
-        O["Organelles"]
+    subgraph "Talos Agent"
+        C["Core Engine"]
+        M["Capabilities"]
         K["KV Store"]
     end
     
-    E -->|"provides<br/>filesystem"| N
-    E -->|"provides<br/>execution context"| O
-    S -->|"is consumed by<br/>and appended to"| N
+    E -->|"provides<br/>filesystem"| C
+    E -->|"provides<br/>execution context"| M
+    S -->|"consumed and<br/>produced by"| C
     K -->|"persisted to"| E
     
-    style N fill:#f96
-    style O fill:#f96
+    style C fill:#f96
+    style M fill:#f96
     style K fill:#f96
     style E fill:#9cf
     style S fill:#9cf
@@ -268,24 +258,24 @@ graph TB
 
 | Component | Talos | Talos Runtime |
 |-----------|-------|---------------|
-| DNA/Source Code | ✓ (the cell's logic) | - |
-| Nucleus | ✓ | - |
-| Organelles | ✓ | - |
-| KV Store | ✓ | - |
+| Source Code | ✓ | — |
+| Core Engine | ✓ | — |
+| Capabilities | ✓ | — |
+| KV Store | ✓ | — |
 | Singular Stream | ✓ | Hosted by |
-| Execution Environment | - | ✓ |
-| Docker/CLI Infrastructure | - | ✓ |
-| File System Access | Via organelles | Provides |
+| Execution Environment | — | ✓ |
+| Docker/CLI Infrastructure | — | ✓ |
+| File System Access | Via capabilities | Provides |
 
-**Talos** = The autonomous agent logic (what thinks, decides, mutates)
+**Talos** = The autonomous agent logic (decision making, source modification)
 
-**Talos Runtime** = The execution environment (how Talos runs, persists, communicates)
+**Talos Runtime** = The execution environment (hosting, persistence, communication)
 
 ---
 
 ## Appendix: Future Sections
 
 - **Runtime Specification:** Docker deployment, CLI commands, environment variables
-- **Organelle API Reference:** Detailed parameter specs for each organelle
+- **Capability API Reference:** Detailed parameter specifications
 - **Constitution:** Core principles encoded in Message 0
-- **Phoenix Protocol:** Restart and recovery procedures
+- **Recovery Protocol:** Restart and recovery procedures
