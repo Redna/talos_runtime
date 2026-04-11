@@ -1015,39 +1015,40 @@
 <h3 id="33-the-piggyback-hud">3.3 The Piggyback HUD</h3>
 <p>The HUD is not injected as a separate turn — it is appended to the last tool output as a lightweight status piggyback. This gives the agent a sensation of its current state without polluting the stream with redundant telemetry on every turn.</p>
 <p><strong>Format:</strong>
-<div class="highlight"><pre><span></span><code>[HUD | Context: X% | Turn: Y | Time: Z | Memory: N keys | Focus: objective | Urgency: LEVEL] [SYSTEM: Event Description]
+<div class="highlight"><pre><span></span><code>[HUD | Context: X% | Turn: Y | Time: Z | Memory: N keys | Focus: objective] [SYSTEM: Event Description | Urgency: LEVEL]
 </code></pre></div></p>
+<p>Urgency applies to system events, not the HUD status line. It qualifies <em>why</em> the piggyback was injected — not the agent's general state.</p>
 <p><strong>Urgency Levels:</strong></p>
 <table>
 <thead>
 <tr>
 <th>Level</th>
 <th>Meaning</th>
-<th>Trigger</th>
+<th>Example</th>
 </tr>
 </thead>
 <tbody>
 <tr>
 <td><code>nominal</code></td>
-<td>Normal operation</td>
-<td>Default state</td>
+<td>Informational</td>
+<td>Context threshold at 50%, memory key count update</td>
 </tr>
 <tr>
 <td><code>elevated</code></td>
 <td>Attention needed</td>
-<td>Context &gt; 50%, approaching budget limits, non-critical warnings</td>
+<td>Context &gt; 75%, approaching budget limit</td>
 </tr>
 <tr>
 <td><code>critical</code></td>
 <td>Immediate action required</td>
-<td>Context &gt; 75%, budget exhausted, <code>[FORCE FOLD]</code>, crash recovery</td>
+<td>Creator message: "stop current task", budget exhausted, <code>[FORCE FOLD]</code></td>
 </tr>
 </tbody>
 </table>
 <p><strong>Triggers:</strong>
 - Context threshold breaches (50%, 75%, etc.)
 - System warnings (<code>[RECOMMEND FOLD]</code>, <code>[FORCE FOLD]</code>)
-- External messages from creator
+- External messages from creator (always carry their own urgency)
 - Processing errors
 - Memory state changes (new keys, focus shifts)
 - Budget threshold breaches</p>
@@ -1063,7 +1064,7 @@
 </ul>
 <h3 id="42-the-hud-memory-summary">4.2 The HUD Memory Summary</h3>
 <p>The HUD displays memory state as part of the unified piggyback HUD, not the system prompt:
-<div class="highlight"><pre><span></span><code>[HUD | Context: X% | Turn: Y | Memory: 42 keys | Last 3: database_schema, telegram_flow, ast_rules | Focus: fix_auth_bug | Urgency: elevated]
+<div class="highlight"><pre><span></span><code>[HUD | Context: X% | Turn: Y | Memory: 42 keys | Last 3: database_schema, telegram_flow, ast_rules | Focus: fix_auth_bug]
 </code></pre></div></p>
 <p>The KV store contents are never injected into the system prompt. Memory details are retrieved on-demand via capabilities when needed.</p>
 <hr/>
@@ -1281,7 +1282,7 @@
 <tr>
 <td><code>talos_workspace</code></td>
 <td><code>/app</code></td>
-<td>Agent source code (named Docker volume)</td>
+<td>Agent source code (named Docker volume, isolated from host repo)</td>
 </tr>
 <tr>
 <td><code>./llm_logs</code></td>
