@@ -931,6 +931,8 @@
         LLAMACPP["llama.cpp<br/>(Inference)"]
     end
     ENV["talos_memory/<br/>talos_workspace/"]
+    TOGETHER["Together AI<br/>(Cloud)"]
+    OLLAMA["Ollama<br/>(Cloud)"]
 
     WD --&gt;|"start/stop<br/>Lazarus reset"| N
     N --&gt;|"String Events"| E1
@@ -942,7 +944,9 @@
     E3 --&gt;|"String Responses"| N
     E4 --&gt;|"String Responses"| N
     N --&gt;|"LLM requests"| GATE
-    GATE --&gt;|"route"| LLAMACPP
+    GATE --&gt;|"local route"| LLAMACPP
+    GATE --&gt;|"cloud route"| TOGETHER
+    GATE --&gt;|"cloud route"| OLLAMA
     E2 --&gt;|"Read/Write"| ENV
     E3 --&gt;|"KV Store"| ENV
     E4 --&gt;|"Execute"| ENV
@@ -1003,22 +1007,50 @@
 <p><strong>Turns N to N-5 (Active Window):</strong> Full fidelity — reasoning trace, tool parameters, and raw outputs intact.</p>
 <p><strong>At turn N-6 — What Gets Shed:</strong></p>
 <div class="highlight"><pre><span></span><code>Turn N-6 (archived) →
-  ├─ [REASONING: stripped]
-  ├─ [TOOL PARAMETERS: stripped]  ← e.g., entire write_file content
-  ├─ [TOOL OUTPUT: truncated → "... 500 lines archived ..."]
-  └─ [RETAINED: turn label + task outcome summary only]
+  ├─ [ASSISTANT MESSAGE: retained in full]  ← never shed
+  ├─ [TOOL PARAMETERS: stripped]             ← e.g., entire write_file content
+  └─ [TOOL OUTPUT: truncated → "... 500 lines archived ..."]
 </code></pre></div>
-<p>This preserves a lightweight trace for auditability while freeing token budget.</p>
+<p>Assistant messages (reasoning, decisions) are never shed — they represent the agent's cognitive trace. Only tool parameters and outputs are stripped, as they can be large but are recoverable from the environment.</p>
 <h3 id="33-the-piggyback-hud">3.3 The Piggyback HUD</h3>
 <p>The HUD is not injected as a separate turn — it is appended to the last tool output as a lightweight status piggyback. This gives the agent a sensation of its current state without polluting the stream with redundant telemetry on every turn.</p>
 <p><strong>Format:</strong>
-<div class="highlight"><pre><span></span><code>[Context: X% | Turn: Y | Time: Z] [SYSTEM: Event Description]
+<div class="highlight"><pre><span></span><code>[HUD | Context: X% | Turn: Y | Time: Z | Memory: N keys | Focus: objective | Urgency: LEVEL] [SYSTEM: Event Description]
 </code></pre></div></p>
+<p><strong>Urgency Levels:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Level</th>
+<th>Meaning</th>
+<th>Trigger</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>nominal</code></td>
+<td>Normal operation</td>
+<td>Default state</td>
+</tr>
+<tr>
+<td><code>elevated</code></td>
+<td>Attention needed</td>
+<td>Context &gt; 50%, approaching budget limits, non-critical warnings</td>
+</tr>
+<tr>
+<td><code>critical</code></td>
+<td>Immediate action required</td>
+<td>Context &gt; 75%, budget exhausted, <code>[FORCE FOLD]</code>, crash recovery</td>
+</tr>
+</tbody>
+</table>
 <p><strong>Triggers:</strong>
 - Context threshold breaches (50%, 75%, etc.)
 - System warnings (<code>[RECOMMEND FOLD]</code>, <code>[FORCE FOLD]</code>)
 - External messages from creator
-- Processing errors</p>
+- Processing errors
+- Memory state changes (new keys, focus shifts)
+- Budget threshold breaches</p>
 <p>The HUD is appended only when one of these events occurs, keeping the stream clean during normal operation.</p>
 <hr/>
 <h2 id="4-layer-2-task-memory-management">4. Layer 2: Task &amp; Memory Management</h2>
@@ -1030,8 +1062,8 @@
 <li>Focus is managed via <code>set_focus</code> (begin new goal) and <code>resolve_focus</code> (complete goal with synthesis)</li>
 </ul>
 <h3 id="42-the-hud-memory-summary">4.2 The HUD Memory Summary</h3>
-<p>The HUD displays a memory summary as part of its status line, not the system prompt:
-<div class="highlight"><pre><span></span><code>[HUD | Context: X% | Turn: Y | Queue: Z | Memory: 42 keys | Last 3: database_schema, telegram_flow, ast_rules]
+<p>The HUD displays memory state as part of the unified piggyback HUD, not the system prompt:
+<div class="highlight"><pre><span></span><code>[HUD | Context: X% | Turn: Y | Memory: 42 keys | Last 3: database_schema, telegram_flow, ast_rules | Focus: fix_auth_bug | Urgency: elevated]
 </code></pre></div></p>
 <p>The KV store contents are never injected into the system prompt. Memory details are retrieved on-demand via capabilities when needed.</p>
 <hr/>
@@ -1074,8 +1106,12 @@
 </thead>
 <tbody>
 <tr>
+<td><code>generate_repo_map()</code></td>
+<td>Scans entire repository, returns index of all symbols and their locations (File → Symbol → Line)</td>
+</tr>
+<tr>
 <td><code>generate_symbol_map(path: str)</code></td>
-<td>Scans codebase via AST parser (Tree-sitter), returns structural skeleton (File → Class → Function)</td>
+<td>Scans single file via AST parser (Tree-sitter), returns structural skeleton (File → Class → Function)</td>
 </tr>
 <tr>
 <td><code>replace_symbol(path: str, symbol_name: str, new_code: str)</code></td>
@@ -1129,7 +1165,7 @@
 <tbody>
 <tr>
 <td><code>bash_command(command: str)</code></td>
-<td>Git operations, environment exploration, script execution</td>
+<td>Git operations, environment exploration, script execution. Rejects <code>--no-verify</code> and equivalent flags that bypass git hooks</td>
 </tr>
 <tr>
 <td><code>send_message(text: str)</code></td>
@@ -1137,7 +1173,7 @@
 </tr>
 <tr>
 <td><code>restart()</code></td>
-<td>Graceful termination to apply source modifications</td>
+<td>Graceful termination to apply source modifications. Rejected if uncommitted changes exist</td>
 </tr>
 </tbody>
 </table>
@@ -1172,7 +1208,9 @@
 <li><strong>Constitutional Auditor:</strong> A zero-temperature LLM acts as judge. It receives the git diff and the full constitutional text, then evaluates whether the proposed change conflicts with any core principle. The agent cannot commit until the auditor returns a clean verdict.</li>
 <li><strong>Graceful Restart:</strong> After commit with clean git status, agent calls <code>restart</code> to reload with updated source</li>
 </ol>
-<p><strong>Constraint:</strong> The <code>restart</code> capability rejects execution if there are unstaged or uncommitted changes in the repository.</p>
+<p><strong>Constraints:</strong>
+- The <code>restart</code> capability rejects execution if there are unstaged or uncommitted changes in the repository. All modifications must be committed before a restart is permitted.
+- The <code>bash_command</code> capability rejects any command containing <code>--no-verify</code> (or equivalent flags like <code>--no-gpg-sign</code>) that would bypass git pre-commit hooks. This is enforced at the capability level, not as a convention.</p>
 <hr/>
 <h2 id="7-runtime-architecture">7. Runtime Architecture</h2>
 <p>The runtime is a Docker Compose stack that provides the agent with its execution environment, LLM inference, and proxy routing. It is managed by <code>talosctl</code>, the host-side watchdog daemon.</p>
@@ -1193,7 +1231,8 @@
     TALOS --&gt;|"/memory"| MEM
     TALOS --&gt;|"/app"| WS
     GATE --&gt;|"local route"| LLAMACPP
-    GATE --&gt;|"remote route"| TOGETHER["Together AI"]
+    GATE --&gt;|"cloud route"| TOGETHER["Together AI"]
+    GATE --&gt;|"cloud route"| OLLAMA["Ollama"]
     GATE --&gt;|"audit logs"| LOGS
     LLAMACPP --&gt;|".gguf models"| MODELS
 </code></pre>
@@ -1299,7 +1338,7 @@ talosctl daemon  # Foreground loop (called by start)
 <ol>
 <li><strong>Capture crash log</strong> — <code>docker compose logs --tail=100 talos</code> → <code>/memory/last_crash.log</code></li>
 <li><strong>Reset by depth</strong> — <code>git reset --hard HEAD~N</code> on both the named volume and host repo</li>
-<li><strong>Queue system notice</strong> — Inform the next incarnation about the crash and revert depth</li>
+<li><strong>Queue system notice</strong> — A piggyback HUD message is injected into the next agent incarnation's first tool output, informing it about the crash, the revert depth, and any relevant context. This ensures the agent is immediately aware of its recovery state.</li>
 <li><strong>Escalation</strong> — After 5 consecutive failures on the same task, inject a <code>[SYSTEM OVERRIDE]</code> forcing the agent to abandon the approach</li>
 </ol>
 <p>The reset depth increases with each consecutive failure on the same task (1, 2, 3, 4, 5), capped at <code>MAX_REVERSAL_DEPTH = 5</code>.</p>
@@ -1311,9 +1350,10 @@ talosctl daemon  # Foreground loop (called by start)
 <h3 id="request-routing">Request Routing</h3>
 <div class="highlight"><pre><span></span><code>Agent → POST /v1/chat/completions → Gate → Route decision
                                           ├─ .gguf model → llama.cpp (local, free)
-                                          └─ together_ai/ prefix → Together AI (paid)
+                                          ├─ together_ai/ prefix → Together AI (cloud, paid)
+                                          └─ ollama/ prefix → Ollama (cloud)
 </code></pre></div>
-<p>The <code>MODEL_MAP</code> dictionary maps <code>.gguf</code> filenames to <code>local</code>, and any model name containing <code>together</code> routes to the remote API. Unknown models default to local.</p>
+<p>The <code>MODEL_MAP</code> dictionary maps <code>.gguf</code> filenames to <code>local</code>, model names containing <code>together</code> to Together AI, and model names containing <code>ollama</code> to the Ollama backend. Unknown models default to local.</p>
 <h3 id="budget-enforcement">Budget Enforcement</h3>
 <ul>
 <li>A daily spend limit (<code>DAILY_BUDGET_LIMIT</code>, default $5.00) caps Together AI usage</li>
