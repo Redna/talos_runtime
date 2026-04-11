@@ -126,11 +126,25 @@ func (s *Supervisor) handleCortexExit(exitCode int) {
 		"exit_code": exitCode,
 	})
 
+	// Reset failure counter if cortex ran past startup timeout (stable run)
+	if s.health.firstThinkDone {
+		s.consecutiveFailures = 0
+	}
+
 	// Check if this was a startup failure
 	if s.health.IsStartupFailure(exitCode) {
 		log.Println("[Spine] Cortex failed during startup — reverting last commit")
 		s.events.Emit("spine.startup_failure", map[string]interface{}{"exit_code": exitCode})
+		s.consecutiveFailures++
 		s.revertCommit(1)
+
+		s.stream.QueueSystemNotice(fmt.Sprintf(
+			"[SYSTEM | Cortex startup failure (exit code %d). Reverted 1 commit. Consecutive failures: %d]",
+			exitCode, s.consecutiveFailures,
+		))
+
+		time.Sleep(5 * time.Second)
+		return
 	}
 
 	// Lazarus Protocol: increment failure count and revert commits
