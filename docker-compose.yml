@@ -1,0 +1,148 @@
+services:
+  talos:
+    build:
+      context: ..
+      dockerfile: talos_runtime/Dockerfile
+    container_name: talos_agent
+    security_opt:
+      - seccomp=unconfined
+    env_file: .env
+    environment:
+      - TALOS_REPO_DIR=/app
+      - PUID=${PUID:-1000}
+      - PGID=${PGID:-1000}
+      - UV_PROJECT_ENVIRONMENT=/venv
+      - UV_CACHE_DIR=/tmp/.uv-cache
+      - DEFAULT_MODEL=${DEFAULT_MODEL}
+      - TALOS_MODEL=${TALOS_MODEL}
+    volumes:
+      - ../talos_memory:/memory
+      - talos_workspace:/app
+    networks:
+      - talos_net
+    depends_on:
+      gate:
+        condition: service_healthy
+
+  gate:
+    build:
+      context: ./gate
+      dockerfile: Dockerfile
+    container_name: talos_gate
+    ports:
+      - "4000:4000"
+    volumes:
+      - ../talos_memory:/memory:rw
+      - ./llm_logs:/runtime_logs:rw
+    environment:
+      - TOGETHERAI_API_KEY=${TOGETHERAI_API_KEY:-}
+      - MEMORY_DIR=/memory
+      - RUNTIME_LOG_DIR=/runtime_logs
+      - DAILY_BUDGET_LIMIT=${DAILY_BUDGET_LIMIT:-5.00}
+      - TALOS_CONTEXT_WINDOW=${TALOS_CONTEXT_WINDOW:-71680}
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request, json; resp = urllib.request.urlopen('http://localhost:4000/health').read(); data = json.loads(resp); exit(0 if data.get('status') == 'healthy' else 1)"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+    restart: unless-stopped
+    networks:
+      - talos_net
+
+  llamacpp:
+    image: ${LLAMACPP_IMAGE:-ghcr.io/ggml-org/llama.cpp:server-rocm}
+    container_name: llamacpp
+    restart: unless-stopped
+    privileged: true
+    shm_size: 16G
+    devices:
+      - /dev/kfd:/dev/kfd
+      - /dev/dri:/dev/dri
+    group_add:
+      - video
+      - render
+    cap_add:
+      - SYS_PTRACE
+    security_opt:
+      - seccomp=unconfined
+    ipc: host
+    volumes:
+      - ./models:/models
+    ports:
+      - "8000:8080"
+    environment:
+      - HSA_ENABLE_SDMA=0
+    command:
+      - -m
+      - /models/${DEFAULT_MODEL}
+      - --host
+      - "0.0.0.0"
+      - --port
+      - "8080"
+      - -ngl
+      - "999"
+      - -c
+      - "65536"
+      - --no-warmup
+      - --flash-attn
+      - "on"
+      - --cache-type-k
+      - "q4_0"
+      - --cache-type-v
+      - "q4_0"
+      - -b
+      - "1024"
+      - -ub
+      - "512"
+      - -np
+      - "1"
+      - --temp
+      - "1.0"
+      - --top-p
+      - "0.95"
+      - --top-k
+      - "64"
+      - --reasoning
+      - "on"
+    networks:
+      - talos_net
+
+  spine:
+    build:
+      context: ./spine
+      dockerfile: Dockerfile
+    container_name: talos_spine
+    env_file: .env
+    environment:
+      - GATE_URL=http://gate:4000
+      - MEMORY_DIR=/memory
+      - SPINE_DIR=/spine
+      - APP_DIR=/app
+      - CONSTITUTION_PATH=/app/CONSTITUTION.md
+      - IDENTITY_PATH=/app/identity.md
+      - SOCKET_PATH=/tmp/spine.sock
+      - CONTROL_PLANE_PORT=4001
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN:-}
+      - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID:-0}
+    volumes:
+      - ../talos_memory:/memory
+      - spine_observability:/spine
+      - talos_workspace:/app:ro
+      - /tmp/talos_spine.sock:/tmp/spine.sock
+    ports:
+      - "4001:4001"
+    depends_on:
+      gate:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - talos_net
+
+networks:
+  talos_net:
+    driver: bridge
+
+volumes:
+  talos_workspace:
+  spine_observability:
