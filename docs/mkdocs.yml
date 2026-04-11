@@ -1,0 +1,36 @@
+site_name: Talos Runtime
+site_description: Autonomous Agent Architecture Specification
+site_url: https://redna.github.io/talos_runtime/
+
+theme:
+  name: material
+  palette:
+    scheme: slate
+    primary: blue grey
+    accent: light blue
+  features:
+    - navigation.indexes
+    - navigation.top
+    - content.code.copy
+    - content.tooltips
+
+plugins:
+  - mermaid2
+  - search
+
+nav:
+  - Home: index.md
+  - Architecture: ARCHITECTURE.md
+
+markdown_extensions:
+  - tables
+  - fenced_code
+  - admonition
+  - attr_list
+  - md_in_html
+  - pymdownx.details
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:mermaid2.fence_mermaid_custom
