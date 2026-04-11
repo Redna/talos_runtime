@@ -1,0 +1,46 @@
+# Agent state (Cortex reads/writes)
+/memory/
+
+# Spine observability (Cortex read-only)
+/spine/
+
+# Secrets
+.env
+.env.*
+*.key
+*.pem
+*.log
+
+# Models (not tracked)
+models/
+
+# Data Folders (persistent state)
+talos_data/
+
+# LLM call logs (runtime, not tracked)
+llm_logs/*
+!llm_logs/.gitkeep
+
+# Databases
+*.sqlite
+*.sqlite3
+*.db
+
+# IDE
+.cursor/
+.vscode/
+.idea/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+.pytest_cache/
+.mypy_cache/
+
+# OS
+.DS_Store
+Thumbs.db
