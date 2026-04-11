@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"log"
 	"net"
 	"os"
@@ -13,6 +14,7 @@ type IPCServer struct {
 	stream     *StreamManager
 	events     *EventLogger
 	listener   net.Listener
+	done       chan struct{}
 }
 
 func NewIPCServer(cfg *Config, supervisor *Supervisor, stream *StreamManager, events *EventLogger) *IPCServer {
@@ -21,12 +23,15 @@ func NewIPCServer(cfg *Config, supervisor *Supervisor, stream *StreamManager, ev
 		supervisor: supervisor,
 		stream:     stream,
 		events:     events,
+		done:       make(chan struct{}),
 	}
 }
 
 func (s *IPCServer) Start() error {
 	// Remove existing socket
-	os.Remove(s.cfg.SocketPath)
+	if err := os.Remove(s.cfg.SocketPath); err != nil && !os.IsNotExist(err) {
+		log.Printf("[Spine] Warning: could not remove stale socket %s: %v", s.cfg.SocketPath, err)
+	}
 
 	var err error
 	s.listener, err = net.Listen("unix", s.cfg.SocketPath)
@@ -39,13 +44,19 @@ func (s *IPCServer) Start() error {
 	for {
 		conn, err := s.listener.Accept()
 		if err != nil {
-			return err
+			select {
+			case <-s.done:
+				return nil // intentional shutdown
+			default:
+				return err
+			}
 		}
 		go s.handleConn(conn)
 	}
 }
 
 func (s *IPCServer) Stop() {
+	close(s.done)
 	if s.listener != nil {
 		s.listener.Close()
 	}
@@ -64,7 +75,10 @@ func (s *IPCServer) handleConn(conn net.Conn) {
 		}
 
 		resp := s.handleRequest(req)
-		enc.Encode(resp)
+		if err := enc.Encode(resp); err != nil {
+			log.Printf("[Spine] IPC encode error: %v", err)
+			return
+		}
 	}
 }
 
@@ -95,7 +109,9 @@ func (s *IPCServer) handleRequest(req JSONRPCRequest) JSONRPCResponse {
 
 func (s *IPCServer) handleThink(req JSONRPCRequest) JSONRPCResponse {
 	var params ThinkRequest
-	remarshal(req.Params, &params)
+	if err := remarshal(req.Params, &params); err != nil {
+		return JSONRPCResponse{JSONRPC: "2.0", ID: req.ID, Error: &RPCError{Code: -32602, Message: err.Error()}}
+	}
 
 	result, err := s.stream.Think(params)
 	if err != nil {
@@ -110,7 +126,9 @@ func (s *IPCServer) handleThink(req JSONRPCRequest) JSONRPCResponse {
 
 func (s *IPCServer) handleToolResult(req JSONRPCRequest) JSONRPCResponse {
 	var params ToolResultRequest
-	remarshal(req.Params, &params)
+	if err := remarshal(req.Params, &params); err != nil {
+		return JSONRPCResponse{JSONRPC: "2.0", ID: req.ID, Error: &RPCError{Code: -32602, Message: err.Error()}}
+	}
 
 	s.stream.RecordToolResult(params)
 	return JSONRPCResponse{JSONRPC: "2.0", ID: req.ID, Result: "ok"}
@@ -118,7 +136,9 @@ func (s *IPCServer) handleToolResult(req JSONRPCRequest) JSONRPCResponse {
 
 func (s *IPCServer) handleRequestFold(req JSONRPCRequest) JSONRPCResponse {
 	var params RequestFoldRequest
-	remarshal(req.Params, &params)
+	if err := remarshal(req.Params, &params); err != nil {
+		return JSONRPCResponse{JSONRPC: "2.0", ID: req.ID, Error: &RPCError{Code: -32602, Message: err.Error()}}
+	}
 
 	s.stream.ApplyFold(params.Synthesis)
 	return JSONRPCResponse{JSONRPC: "2.0", ID: req.ID, Result: "ok"}
@@ -126,7 +146,9 @@ func (s *IPCServer) handleRequestFold(req JSONRPCRequest) JSONRPCResponse {
 
 func (s *IPCServer) handleRequestRestart(req JSONRPCRequest) JSONRPCResponse {
 	var params RequestRestartRequest
-	remarshal(req.Params, &params)
+	if err := remarshal(req.Params, &params); err != nil {
+		return JSONRPCResponse{JSONRPC: "2.0", ID: req.ID, Error: &RPCError{Code: -32602, Message: err.Error()}}
+	}
 
 	s.supervisor.RequestRestart(params.Reason)
 	return JSONRPCResponse{JSONRPC: "2.0", ID: req.ID, Result: "restarting"}
@@ -134,7 +156,9 @@ func (s *IPCServer) handleRequestRestart(req JSONRPCRequest) JSONRPCResponse {
 
 func (s *IPCServer) handleSendMessage(req JSONRPCRequest) JSONRPCResponse {
 	var params SendMessageRequest
-	remarshal(req.Params, &params)
+	if err := remarshal(req.Params, &params); err != nil {
+		return JSONRPCResponse{JSONRPC: "2.0", ID: req.ID, Error: &RPCError{Code: -32602, Message: err.Error()}}
+	}
 
 	// Route through Telegram if configured
 	if params.Channel == "telegram" && s.cfg.TelegramBotToken != "" {
@@ -145,7 +169,9 @@ func (s *IPCServer) handleSendMessage(req JSONRPCRequest) JSONRPCResponse {
 
 func (s *IPCServer) handleEmitEvent(req JSONRPCRequest) JSONRPCResponse {
 	var params EmitEventRequest
-	remarshal(req.Params, &params)
+	if err := remarshal(req.Params, &params); err != nil {
+		return JSONRPCResponse{JSONRPC: "2.0", ID: req.ID, Error: &RPCError{Code: -32602, Message: err.Error()}}
+	}
 
 	s.events.Emit(params.Type, params.Payload)
 	return JSONRPCResponse{JSONRPC: "2.0", ID: req.ID, Result: "ok"}
@@ -153,14 +179,22 @@ func (s *IPCServer) handleEmitEvent(req JSONRPCRequest) JSONRPCResponse {
 
 func (s *IPCServer) handleGetState(req JSONRPCRequest) JSONRPCResponse {
 	var params GetStateRequest
-	remarshal(req.Params, &params)
+	if err := remarshal(req.Params, &params); err != nil {
+		return JSONRPCResponse{JSONRPC: "2.0", ID: req.ID, Error: &RPCError{Code: -32602, Message: err.Error()}}
+	}
 
 	state := s.stream.GetState(params.Keys)
 	return JSONRPCResponse{JSONRPC: "2.0", ID: req.ID, Result: state}
 }
 
 // Helper to re-serialize interface{} into a typed struct
-func remarshal(src interface{}, dst interface{}) {
-	data, _ := json.Marshal(src)
-	json.Unmarshal(data, dst)
+func remarshal(src interface{}, dst interface{}) error {
+	data, err := json.Marshal(src)
+	if err != nil {
+		return fmt.Errorf("remarshal encode: %w", err)
+	}
+	if err := json.Unmarshal(data, dst); err != nil {
+		return fmt.Errorf("remarshal decode: %w", err)
+	}
+	return nil
 }
