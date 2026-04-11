@@ -47,10 +47,9 @@ The current agent (Ouroboros) has accumulated architectural debt that makes it h
 │  │  - Health monitor   │  │  - Constitutional audit     │  │
 │  │  - HUD injection    │  │                             │  │
 │  │  - Control plane    │  │                             │  │
-│  │  - Tool validation  │  │                             │  │
 │  │  - Fold enforcement │  │                             │  │
-│  │  - Communication    │  │                             │  │
-│  │    (Telegram, CLI)  │  │                             │  │
+│  │  - Essential notifs │  │                             │  │
+│  │    (Telegram, API)  │  │                             │  │
 │  └───────┬─────────────┘  └───────────▲─────────────────┘  │
 │          │ Unix socket                │ HTTP                │
 │          │ (IPC)                      │                     │
@@ -92,10 +91,10 @@ The Spine is a thin, deterministic state machine written in Go. It owns everythi
 | **State snapshots** | Periodically saves full Cortex state to `/spine/snapshots/`. On crash recovery, restores the last good state. |
 | **Health monitoring** | Watches for Cortex stalls (no events within timeout), crashes (process exit), and startup failures (exit within 30s). |
 | **Cortex supervision** | Starts, stops, and restarts the Cortex process. Manages the lifecycle. |
-| **Tool validation** | Validates tool schemas at registration time. Validates tool calls at runtime. Rejects malformed schemas and calls. |
+| **Tool validation** | Validates tool schemas included in each `think()` call on-the-fly (standard OpenAI JSON Schema format). Validates tool calls at runtime. Rejects malformed schemas and calls. |
 | **Control plane** | Exposes HTTP API on port 4001 for external observation and control. |
 | **Error synthesis** | Generates synthetic tool results for orphaned tool calls, timeouts, and LLM API errors. Never lets a malformed payload reach the LLM. |
-| **Communication** | Owns Telegram adapter, CLI endpoint, and future channels. Routes messages between the Cortex and external consumers. Can send messages even when the Cortex is down (e.g., crash notifications). |
+| **Essential notifications** | Hardcoded Telegram adapter and Control Plane API for crash alerts, health status, and essential notifications. Works even when the Cortex is down. |
 
 ### 4.2 The Spine is NOT
 
@@ -124,6 +123,7 @@ The Cortex is the self-evolving Python agent. It's the decision-maker.
 | **Tool execution** | Owns the tool registry. Executes tools and returns results to the Spine. |
 | **Self-modification** | Can write to its own Python source files within `/app`. Commits via git. Requests restart via `spine.request_restart()`. |
 | **Memory management** | Direct filesystem access to `/memory` for KV store, agenda, task queue, folds. The Cortex reads and writes its own data without going through the Spine. |
+| **Communication tools** | The Cortex can create any communication tool (Discord, Slack, email, etc.) as regular Python tools. These are just tools — they call external APIs directly. No Spine involvement needed beyond the standard IPC. |
 
 ### 5.2 What the Cortex Cannot Do
 
@@ -142,16 +142,14 @@ Communication via Unix domain socket with JSON-RPC-like protocol.
 
 | Method | Purpose | Parameters |
 |--------|---------|------------|
-| `think` | Call the LLM with current stream | `{focus: string}` |
-| `register_tools` | Register tool schemas with the Spine | `{tools: [{name, description, parameters}]}` |
+| `think` | Call the LLM with current stream and tool definitions | `{focus: string, tools: [{name, description, parameters}]}` — tools use standard OpenAI JSON Schema format |
 | `tool_result` | Return tool execution result | `{tool_call_id: string, output: string, success: bool}` |
 | `request_fold` | Request a context fold | `{synthesis: string}` |
 | `request_restart` | Request a clean restart | `{reason: string}` |
-| `send_message` | Send a message to the creator | `{channel: string, text: string}` |
 | `emit_event` | Log a custom event | `{type: string, payload: object}` |
 | `get_state` | Query the Spine's view of agent state | `{keys: [string]}` — returns authoritative values for context_pct, turn, tokens_consumed, fold_pending, etc. |
 
-**Note on `register_tools`:** This is called at Cortex startup, after the tool registry is initialized. The Spine validates each schema (required fields, no duplicates, valid types). Rejected tools are unavailable but don't crash the agent. If the Cortex modifies a tool via self-modification, it re-registers on the next startup after restart.
+**Note on `think` and tools:** The Cortex includes its current tool definitions (in standard OpenAI JSON Schema format) with every `think()` call. The Spine validates them on-the-fly — no separate registration step. If a tool schema is invalid, the Spine rejects that specific tool and logs a warning, but continues with the valid ones. This is aligned with P5 (Minimalism) and P3 (LLM-First) — no extra registration protocol, just the standard OpenAI convention.
 
 **Note on `get_state`:** The Spine maintains an authoritative view of agent state (context window usage, turn count, total tokens, whether a fold is pending, etc.). The Cortex can query this to get accurate values that may differ from its own stale context after a fold or restart.
 
@@ -391,16 +389,17 @@ The containment model from the current architecture is preserved:
 
 ## 11. Tool Schema Safety
 
-### 11.1 Registration-Time Validation
+Tool definitions follow the standard OpenAI JSON Schema convention. The Cortex includes tool definitions with every `think()` call — no separate registration protocol.
 
-When the Cortex registers a tool with the Spine, the Spine validates the JSON Schema:
+### 11.1 On-the-Fly Validation
+
+When the Spine receives a `think()` call with tool definitions, it validates each schema on-the-fly:
 - Must have `name` (string), `description` (string), `parameters` (valid JSON Schema object)
-- No duplicate tool names
-- Parameter names must match `^[a-zA-Z_][a-zA-Z0-9_]*$`
+- No duplicate tool names within the same call
 - Each parameter must have a `type` field
 - Required parameters must be listed
 
-Invalid schemas are rejected. The tool is simply unavailable, not crashing.
+Invalid schemas are rejected for that specific tool (the Spine logs a warning), but the rest of the call proceeds. The rejected tool is simply unavailable for that turn.
 
 ### 11.2 Runtime Validation
 
@@ -409,20 +408,9 @@ When the LLM returns a tool call, the Spine validates:
 - Wrong types → reject with type error
 - Unknown tool name → reject with available tools list
 
-### 11.3 Schema Hash Verification
+### 11.3 Tool Evolution
 
-The Spine tracks the hash of each tool's schema. If the agent modifies a tool's schema mid-session (via self-modification), calls using the old schema are rejected with a clear error.
-
-### 11.4 Tool Registration Process
-
-The Cortex registers its tools with the Spine at startup. This is how the Spine knows which tools to include in LLM API calls:
-
-1. **Cortex startup:** The Python process initializes, decorates all tool functions with `@registry.tool(...)`, and builds the tool registry.
-2. **Registration call:** The Cortex sends `register_tools` to the Spine with a list of all tool definitions: `[{name, description, parameters_json_schema}, ...]`.
-3. **Validation:** The Spine validates each schema (required fields, no duplicates, valid parameter names, correct types). Invalid tools are rejected and logged — they're unavailable but don't crash the agent.
-4. **Inclusion in think():** On each `think()` call, the Spine includes all currently registered tools in the LLM API payload (unless a forced fold overrides the tool list to only `fold_context`).
-5. **Re-registration after self-modification:** When the Cortex modifies its own source code and restarts, it re-registers all tools. If a tool's schema has changed, the new schema takes effect. The Spine logs a `schema_changed` event for observability.
-6. **Dynamic registration:** The Cortex can call `register_tools` at any time (not just startup) to add new tools. This supports the evolution use case where the agent creates new capabilities.
+Since tools are included in every `think()` call, self-modification works naturally: after the Cortex modifies a tool and restarts, the next `think()` call includes the updated tool definition. No separate re-registration step is needed. The Spine always uses the tools provided in the current call — no stored state about tools between calls.
 
 ---
 
@@ -439,35 +427,26 @@ The Cortex registers its tools with the Spine at startup. This is how the Spine 
 | `POST /command` | Send a control command (pause, resume, force_fold, force_restart) |
 | `GET /health` | Spine health check (for talosctl) |
 
-### 12.2 Multi-Channel Communication
+### 12.2 Communication Architecture
 
-The Spine owns all communication adapters (Telegram, CLI, future web dashboard). The Cortex sends messages by calling `spine.send_message(channel, text)`. The Spine can send messages independently even when the Cortex is down (e.g., crash notifications, status updates).
+Communication is split between essential Spine notifications and Cortex-managed channels:
 
-```
-Telegram ──┐                    ┌── Event log (structured JSONL)
-CLI ───────┼── Spine Control ──┼── Telegram responses
-Web API ───┘    Plane          ┼── CLI output
-                               └── Web dashboard (future)
-```
+**Spine (essential notifications only):**
+- Hardcoded Telegram adapter for crash alerts, health status, and critical notifications
+- Control Plane API on port 4001 for observation and control
+- Works even when the Cortex is down — the Spine can always reach the creator
 
-### 12.3 Communication Flow
+**Cortex (all other communication):**
+- The Cortex can create any communication tool as regular Python tools (Discord, Slack, email, etc.)
+- These tools call external APIs directly — no Spine involvement needed
+- The agent can evolve its own communication capabilities via self-modification (P2)
+- Existing Telegram conversations happen through the Spine's adapter, but rich interactions are Cortex-driven
 
-**Outgoing (Cortex → Creator):**
-1. Cortex decides to send a message
-2. Cortex calls `spine.send_message("telegram", "Hello creator")`
-3. Spine routes to the appropriate adapter
-4. Adapter delivers the message
-
-**Incoming (Creator → Cortex):**
-1. Creator sends a message via Telegram/CLI
-2. Spine adapter receives it
+**Incoming messages:**
+1. Creator sends a message via Telegram
+2. Spine's Telegram adapter receives it
 3. Spine injects it as a `system_notice` push notification to the Cortex
-4. Cortex processes it in the next think() cycle
-
-**Spine-initiated (no Cortex needed):**
-1. Spine detects Cortex crash
-2. Spine sends crash notification directly to Telegram
-3. Creator can inspect via Control Plane without Cortex involvement
+4. Cortex processes it in the next `think()` cycle
 
 ---
 
