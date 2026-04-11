@@ -1,0 +1,3 @@
+# Core dependencies — minimal, matching the current Ouroboros stack
+# tree-sitter is for AST-aware code editing (replace_symbol)
+# httpx is for direct API calls (communication tools)
