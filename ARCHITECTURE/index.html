@@ -1,0 +1,1398 @@
+
+<!DOCTYPE html>
+
+<html class="no-js" lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta content="width=device-width,initial-scale=1" name="viewport"/>
+<meta content="Autonomous Agent Architecture Specification" name="description"/>
+<link href="https://redna.github.io/talos_runtime/ARCHITECTURE/" rel="canonical"/>
+<link href=".." rel="prev"/>
+<link href="../assets/images/favicon.png" rel="icon"/>
+<meta content="mkdocs-1.6.1, mkdocs-material-9.7.6" name="generator"/>
+<title>Architecture - Talos Runtime</title>
+<link href="../assets/stylesheets/main.484c7ddc.min.css" rel="stylesheet"/>
+<link href="../assets/stylesheets/palette.ab4e12ef.min.css" rel="stylesheet"/>
+<link crossorigin="" href="https://fonts.gstatic.com" rel="preconnect"/>
+<link href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&amp;display=fallback" rel="stylesheet"/>
+<style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+<script>__md_scope=new URL("..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+</head>
+<body data-md-color-accent="light-blue" data-md-color-primary="blue-grey" data-md-color-scheme="slate" dir="ltr">
+<input autocomplete="off" class="md-toggle" data-md-toggle="drawer" id="__drawer" type="checkbox"/>
+<input autocomplete="off" class="md-toggle" data-md-toggle="search" id="__search" type="checkbox"/>
+<label class="md-overlay" for="__drawer"></label>
+<div data-md-component="skip">
+<a class="md-skip" href="#talos-architecture">
+          Skip to content
+        </a>
+</div>
+<div data-md-component="announce">
+</div>
+<header class="md-header md-header--shadow" data-md-component="header">
+<nav aria-label="Header" class="md-header__inner md-grid">
+<a aria-label="Talos Runtime" class="md-header__button md-logo" data-md-component="logo" href=".." title="Talos Runtime">
+<svg viewbox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"></path></svg>
+</a>
+<label class="md-header__button md-icon" for="__drawer">
+<svg viewbox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"></path></svg>
+</label>
+<div class="md-header__title" data-md-component="header-title">
+<div class="md-header__ellipsis">
+<div class="md-header__topic">
+<span class="md-ellipsis">
+            Talos Runtime
+          </span>
+</div>
+<div class="md-header__topic" data-md-component="header-topic">
+<span class="md-ellipsis">
+            
+              Architecture
+            
+          </span>
+</div>
+</div>
+</div>
+<label class="md-header__button md-icon" for="__search">
+<svg viewbox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"></path></svg>
+</label>
+<div class="md-search" data-md-component="search" role="dialog">
+<label class="md-search__overlay" for="__search"></label>
+<div class="md-search__inner" role="search">
+<form class="md-search__form" name="search">
+<input aria-label="Search" autocapitalize="off" autocomplete="off" autocorrect="off" class="md-search__input" data-md-component="search-query" name="query" placeholder="Search" required="" spellcheck="false" type="text"/>
+<label class="md-search__icon md-icon" for="__search">
+<svg viewbox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"></path></svg>
+<svg viewbox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"></path></svg>
+</label>
+<nav aria-label="Search" class="md-search__options">
+<button aria-label="Clear" class="md-search__icon md-icon" tabindex="-1" title="Clear" type="reset">
+<svg viewbox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"></path></svg>
+</button>
+</nav>
+</form>
+<div class="md-search__output">
+<div class="md-search__scrollwrap" data-md-scrollfix="" tabindex="0">
+<div class="md-search-result" data-md-component="search-result">
+<div class="md-search-result__meta">
+            Initializing search
+          </div>
+<ol class="md-search-result__list" role="presentation"></ol>
+</div>
+</div>
+</div>
+</div>
+</div>
+</nav>
+</header>
+<div class="md-container" data-md-component="container">
+<main class="md-main" data-md-component="main">
+<div class="md-main__inner md-grid">
+<div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation">
+<div class="md-sidebar__scrollwrap">
+<div class="md-sidebar__inner">
+<nav aria-label="Navigation" class="md-nav md-nav--primary" data-md-level="0">
+<label class="md-nav__title" for="__drawer">
+<a aria-label="Talos Runtime" class="md-nav__button md-logo" data-md-component="logo" href=".." title="Talos Runtime">
+<svg viewbox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"></path></svg>
+</a>
+    Talos Runtime
+  </label>
+<ul class="md-nav__list" data-md-scrollfix="">
+<li class="md-nav__item">
+<a class="md-nav__link" href="..">
+<span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+</a>
+</li>
+<li class="md-nav__item md-nav__item--active">
+<input class="md-nav__toggle md-toggle" id="__toc" type="checkbox"/>
+<label class="md-nav__link md-nav__link--active" for="__toc">
+<span class="md-ellipsis">
+    
+  
+    Architecture
+  
+
+    
+  </span>
+<span class="md-nav__icon md-icon"></span>
+</label>
+<a class="md-nav__link md-nav__link--active" href="./">
+<span class="md-ellipsis">
+    
+  
+    Architecture
+  
+
+    
+  </span>
+</a>
+<nav aria-label="Table of contents" class="md-nav md-nav--secondary">
+<label class="md-nav__title" for="__toc">
+<span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+<ul class="md-nav__list" data-md-component="toc" data-md-scrollfix="">
+<li class="md-nav__item">
+<a class="md-nav__link" href="#1-overview">
+<span class="md-ellipsis">
+      
+        1. Overview
+      
+    </span>
+</a>
+</li>
+<li class="md-nav__item">
+<a class="md-nav__link" href="#2-core-design-principles">
+<span class="md-ellipsis">
+      
+        2. Core Design Principles
+      
+    </span>
+</a>
+<nav aria-label="2. Core Design Principles" class="md-nav">
+<ul class="md-nav__list">
+<li class="md-nav__item">
+<a class="md-nav__link" href="#21-minimalist-execution-model">
+<span class="md-ellipsis">
+      
+        2.1 Minimalist Execution Model
+      
+    </span>
+</a>
+</li>
+<li class="md-nav__item">
+<a class="md-nav__link" href="#22-strict-interface-boundaries">
+<span class="md-ellipsis">
+      
+        2.2 Strict Interface Boundaries
+      
+    </span>
+</a>
+</li>
+<li class="md-nav__item">
+<a class="md-nav__link" href="#23-the-frozen-stream-invariant">
+<span class="md-ellipsis">
+      
+        2.3 The Frozen Stream Invariant
+      
+    </span>
+</a>
+</li>
+</ul>
+</nav>
+</li>
+<li class="md-nav__item">
+<a class="md-nav__link" href="#3-layer-1-the-stream-state-history">
+<span class="md-ellipsis">
+      
+        3. Layer 1: The Stream (State &amp; History)
+      
+    </span>
+</a>
+<nav aria-label="3. Layer 1: The Stream (State &amp; History)" class="md-nav">
+<ul class="md-nav__list">
+<li class="md-nav__item">
+<a class="md-nav__link" href="#31-the-singular-stream">
+<span class="md-ellipsis">
+      
+        3.1 The Singular Stream
+      
+    </span>
+</a>
+</li>
+<li class="md-nav__item">
+<a class="md-nav__link" href="#32-the-5-turn-high-definition-window-archival">
+<span class="md-ellipsis">
+      
+        3.2 The 5-Turn High-Definition Window &amp; Archival
+      
+    </span>
+</a>
+</li>
+<li class="md-nav__item">
+<a class="md-nav__link" href="#33-the-piggyback-hud">
+<span class="md-ellipsis">
+      
+        3.3 The Piggyback HUD
+      
+    </span>
+</a>
+</li>
+</ul>
+</nav>
+</li>
+<li class="md-nav__item">
+<a class="md-nav__link" href="#4-layer-2-task-memory-management">
+<span class="md-ellipsis">
+      
+        4. Layer 2: Task &amp; Memory Management
+      
+    </span>
+</a>
+<nav aria-label="4. Layer 2: Task &amp; Memory Management" class="md-nav">
+<ul class="md-nav__list">
+<li class="md-nav__item">
+<a class="md-nav__link" href="#41-the-active-focus">
+<span class="md-ellipsis">
+      
+        4.1 The Active Focus
+      
+    </span>
+</a>
+</li>
+<li class="md-nav__item">
+<a class="md-nav__link" href="#42-the-hud-memory-summary">
+<span class="md-ellipsis">
+      
+        4.2 The HUD Memory Summary
+      
+    </span>
+</a>
+</li>
+</ul>
+</nav>
+</li>
+<li class="md-nav__item">
+<a class="md-nav__link" href="#5-layer-3-capabilities">
+<span class="md-ellipsis">
+      
+        5. Layer 3: Capabilities
+      
+    </span>
+</a>
+<nav aria-label="5. Layer 3: Capabilities" class="md-nav">
+<ul class="md-nav__list">
+<li class="md-nav__item">
+<a class="md-nav__link" href="#51-domain-a-executive-control">
+<span class="md-ellipsis">
+      
+        5.1 Domain A: Executive Control
+      
+    </span>
+</a>
+</li>
+<li class="md-nav__item">
+<a class="md-nav__link" href="#52-domain-b-code-surgery">
+<span class="md-ellipsis">
+      
+        5.2 Domain B: Code Surgery
+      
+    </span>
+</a>
+</li>
+<li class="md-nav__item">
+<a class="md-nav__link" href="#53-domain-c-on-demand-memory">
+<span class="md-ellipsis">
+      
+        5.3 Domain C: On-Demand Memory
+      
+    </span>
+</a>
+</li>
+<li class="md-nav__item">
+<a class="md-nav__link" href="#54-domain-d-physical-interfaces">
+<span class="md-ellipsis">
+      
+        5.4 Domain D: Physical Interfaces
+      
+    </span>
+</a>
+</li>
+<li class="md-nav__item">
+<a class="md-nav__link" href="#55-capability-communication-pattern">
+<span class="md-ellipsis">
+      
+        5.5 Capability Communication Pattern
+      
+    </span>
+</a>
+</li>
+</ul>
+</nav>
+</li>
+<li class="md-nav__item">
+<a class="md-nav__link" href="#6-self-modification-update-cycle">
+<span class="md-ellipsis">
+      
+        6. Self-Modification &amp; Update Cycle
+      
+    </span>
+</a>
+</li>
+<li class="md-nav__item">
+<a class="md-nav__link" href="#7-runtime-architecture">
+<span class="md-ellipsis">
+      
+        7. Runtime Architecture
+      
+    </span>
+</a>
+<nav aria-label="7. Runtime Architecture" class="md-nav">
+<ul class="md-nav__list">
+<li class="md-nav__item">
+<a class="md-nav__link" href="#service-breakdown">
+<span class="md-ellipsis">
+      
+        Service Breakdown
+      
+    </span>
+</a>
+</li>
+<li class="md-nav__item">
+<a class="md-nav__link" href="#volume-layout">
+<span class="md-ellipsis">
+      
+        Volume Layout
+      
+    </span>
+</a>
+</li>
+<li class="md-nav__item">
+<a class="md-nav__link" href="#gpu-overlay-files">
+<span class="md-ellipsis">
+      
+        GPU Overlay Files
+      
+    </span>
+</a>
+</li>
+</ul>
+</nav>
+</li>
+<li class="md-nav__item">
+<a class="md-nav__link" href="#8-the-watchdog-talosctl">
+<span class="md-ellipsis">
+      
+        8. The Watchdog (talosctl)
+      
+    </span>
+</a>
+<nav aria-label="8. The Watchdog (talosctl)" class="md-nav">
+<ul class="md-nav__list">
+<li class="md-nav__item">
+<a class="md-nav__link" href="#startup-sequence">
+<span class="md-ellipsis">
+      
+        Startup Sequence
+      
+    </span>
+</a>
+</li>
+<li class="md-nav__item">
+<a class="md-nav__link" href="#the-lazarus-protocol">
+<span class="md-ellipsis">
+      
+        The Lazarus Protocol
+      
+    </span>
+</a>
+</li>
+<li class="md-nav__item">
+<a class="md-nav__link" href="#cognitive-stall-detection">
+<span class="md-ellipsis">
+      
+        Cognitive Stall Detection
+      
+    </span>
+</a>
+</li>
+</ul>
+</nav>
+</li>
+<li class="md-nav__item">
+<a class="md-nav__link" href="#9-the-gate-talos-gate">
+<span class="md-ellipsis">
+      
+        9. The Gate (Talos Gate)
+      
+    </span>
+</a>
+<nav aria-label="9. The Gate (Talos Gate)" class="md-nav">
+<ul class="md-nav__list">
+<li class="md-nav__item">
+<a class="md-nav__link" href="#request-routing">
+<span class="md-ellipsis">
+      
+        Request Routing
+      
+    </span>
+</a>
+</li>
+<li class="md-nav__item">
+<a class="md-nav__link" href="#budget-enforcement">
+<span class="md-ellipsis">
+      
+        Budget Enforcement
+      
+    </span>
+</a>
+</li>
+<li class="md-nav__item">
+<a class="md-nav__link" href="#trace-logging">
+<span class="md-ellipsis">
+      
+        Trace Logging
+      
+    </span>
+</a>
+</li>
+<li class="md-nav__item">
+<a class="md-nav__link" href="#the-audit-endpoint-post-v1audit">
+<span class="md-ellipsis">
+      
+        The Audit Endpoint (POST /v1/audit)
+      
+    </span>
+</a>
+</li>
+<li class="md-nav__item">
+<a class="md-nav__link" href="#health-check-get-health">
+<span class="md-ellipsis">
+      
+        Health Check (GET /health)
+      
+    </span>
+</a>
+</li>
+</ul>
+</nav>
+</li>
+<li class="md-nav__item">
+<a class="md-nav__link" href="#10-containment">
+<span class="md-ellipsis">
+      
+        10. Containment
+      
+    </span>
+</a>
+<nav aria-label="10. Containment" class="md-nav">
+<ul class="md-nav__list">
+<li class="md-nav__item">
+<a class="md-nav__link" href="#user-isolation-entrypointsh">
+<span class="md-ellipsis">
+      
+        User Isolation (entrypoint.sh)
+      
+    </span>
+</a>
+</li>
+<li class="md-nav__item">
+<a class="md-nav__link" href="#script-lockdown">
+<span class="md-ellipsis">
+      
+        Script Lockdown
+      
+    </span>
+</a>
+</li>
+<li class="md-nav__item">
+<a class="md-nav__link" href="#pre-commit-hook-chain">
+<span class="md-ellipsis">
+      
+        Pre-Commit Hook Chain
+      
+    </span>
+</a>
+</li>
+</ul>
+</nav>
+</li>
+<li class="md-nav__item">
+<a class="md-nav__link" href="#appendix-future-sections">
+<span class="md-ellipsis">
+      
+        Appendix: Future Sections
+      
+    </span>
+</a>
+</li>
+</ul>
+</nav>
+</li>
+</ul>
+</nav>
+</div>
+</div>
+</div>
+<div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc">
+<div class="md-sidebar__scrollwrap">
+<div class="md-sidebar__inner">
+<nav aria-label="Table of contents" class="md-nav md-nav--secondary">
+<label class="md-nav__title" for="__toc">
+<span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+<ul class="md-nav__list" data-md-component="toc" data-md-scrollfix="">
+<li class="md-nav__item">
+<a class="md-nav__link" href="#1-overview">
+<span class="md-ellipsis">
+      
+        1. Overview
+      
+    </span>
+</a>
+</li>
+<li class="md-nav__item">
+<a class="md-nav__link" href="#2-core-design-principles">
+<span class="md-ellipsis">
+      
+        2. Core Design Principles
+      
+    </span>
+</a>
+<nav aria-label="2. Core Design Principles" class="md-nav">
+<ul class="md-nav__list">
+<li class="md-nav__item">
+<a class="md-nav__link" href="#21-minimalist-execution-model">
+<span class="md-ellipsis">
+      
+        2.1 Minimalist Execution Model
+      
+    </span>
+</a>
+</li>
+<li class="md-nav__item">
+<a class="md-nav__link" href="#22-strict-interface-boundaries">
+<span class="md-ellipsis">
+      
+        2.2 Strict Interface Boundaries
+      
+    </span>
+</a>
+</li>
+<li class="md-nav__item">
+<a class="md-nav__link" href="#23-the-frozen-stream-invariant">
+<span class="md-ellipsis">
+      
+        2.3 The Frozen Stream Invariant
+      
+    </span>
+</a>
+</li>
+</ul>
+</nav>
+</li>
+<li class="md-nav__item">
+<a class="md-nav__link" href="#3-layer-1-the-stream-state-history">
+<span class="md-ellipsis">
+      
+        3. Layer 1: The Stream (State &amp; History)
+      
+    </span>
+</a>
+<nav aria-label="3. Layer 1: The Stream (State &amp; History)" class="md-nav">
+<ul class="md-nav__list">
+<li class="md-nav__item">
+<a class="md-nav__link" href="#31-the-singular-stream">
+<span class="md-ellipsis">
+      
+        3.1 The Singular Stream
+      
+    </span>
+</a>
+</li>
+<li class="md-nav__item">
+<a class="md-nav__link" href="#32-the-5-turn-high-definition-window-archival">
+<span class="md-ellipsis">
+      
+        3.2 The 5-Turn High-Definition Window &amp; Archival
+      
+    </span>
+</a>
+</li>
+<li class="md-nav__item">
+<a class="md-nav__link" href="#33-the-piggyback-hud">
+<span class="md-ellipsis">
+      
+        3.3 The Piggyback HUD
+      
+    </span>
+</a>
+</li>
+</ul>
+</nav>
+</li>
+<li class="md-nav__item">
+<a class="md-nav__link" href="#4-layer-2-task-memory-management">
+<span class="md-ellipsis">
+      
+        4. Layer 2: Task &amp; Memory Management
+      
+    </span>
+</a>
+<nav aria-label="4. Layer 2: Task &amp; Memory Management" class="md-nav">
+<ul class="md-nav__list">
+<li class="md-nav__item">
+<a class="md-nav__link" href="#41-the-active-focus">
+<span class="md-ellipsis">
+      
+        4.1 The Active Focus
+      
+    </span>
+</a>
+</li>
+<li class="md-nav__item">
+<a class="md-nav__link" href="#42-the-hud-memory-summary">
+<span class="md-ellipsis">
+      
+        4.2 The HUD Memory Summary
+      
+    </span>
+</a>
+</li>
+</ul>
+</nav>
+</li>
+<li class="md-nav__item">
+<a class="md-nav__link" href="#5-layer-3-capabilities">
+<span class="md-ellipsis">
+      
+        5. Layer 3: Capabilities
+      
+    </span>
+</a>
+<nav aria-label="5. Layer 3: Capabilities" class="md-nav">
+<ul class="md-nav__list">
+<li class="md-nav__item">
+<a class="md-nav__link" href="#51-domain-a-executive-control">
+<span class="md-ellipsis">
+      
+        5.1 Domain A: Executive Control
+      
+    </span>
+</a>
+</li>
+<li class="md-nav__item">
+<a class="md-nav__link" href="#52-domain-b-code-surgery">
+<span class="md-ellipsis">
+      
+        5.2 Domain B: Code Surgery
+      
+    </span>
+</a>
+</li>
+<li class="md-nav__item">
+<a class="md-nav__link" href="#53-domain-c-on-demand-memory">
+<span class="md-ellipsis">
+      
+        5.3 Domain C: On-Demand Memory
+      
+    </span>
+</a>
+</li>
+<li class="md-nav__item">
+<a class="md-nav__link" href="#54-domain-d-physical-interfaces">
+<span class="md-ellipsis">
+      
+        5.4 Domain D: Physical Interfaces
+      
+    </span>
+</a>
+</li>
+<li class="md-nav__item">
+<a class="md-nav__link" href="#55-capability-communication-pattern">
+<span class="md-ellipsis">
+      
+        5.5 Capability Communication Pattern
+      
+    </span>
+</a>
+</li>
+</ul>
+</nav>
+</li>
+<li class="md-nav__item">
+<a class="md-nav__link" href="#6-self-modification-update-cycle">
+<span class="md-ellipsis">
+      
+        6. Self-Modification &amp; Update Cycle
+      
+    </span>
+</a>
+</li>
+<li class="md-nav__item">
+<a class="md-nav__link" href="#7-runtime-architecture">
+<span class="md-ellipsis">
+      
+        7. Runtime Architecture
+      
+    </span>
+</a>
+<nav aria-label="7. Runtime Architecture" class="md-nav">
+<ul class="md-nav__list">
+<li class="md-nav__item">
+<a class="md-nav__link" href="#service-breakdown">
+<span class="md-ellipsis">
+      
+        Service Breakdown
+      
+    </span>
+</a>
+</li>
+<li class="md-nav__item">
+<a class="md-nav__link" href="#volume-layout">
+<span class="md-ellipsis">
+      
+        Volume Layout
+      
+    </span>
+</a>
+</li>
+<li class="md-nav__item">
+<a class="md-nav__link" href="#gpu-overlay-files">
+<span class="md-ellipsis">
+      
+        GPU Overlay Files
+      
+    </span>
+</a>
+</li>
+</ul>
+</nav>
+</li>
+<li class="md-nav__item">
+<a class="md-nav__link" href="#8-the-watchdog-talosctl">
+<span class="md-ellipsis">
+      
+        8. The Watchdog (talosctl)
+      
+    </span>
+</a>
+<nav aria-label="8. The Watchdog (talosctl)" class="md-nav">
+<ul class="md-nav__list">
+<li class="md-nav__item">
+<a class="md-nav__link" href="#startup-sequence">
+<span class="md-ellipsis">
+      
+        Startup Sequence
+      
+    </span>
+</a>
+</li>
+<li class="md-nav__item">
+<a class="md-nav__link" href="#the-lazarus-protocol">
+<span class="md-ellipsis">
+      
+        The Lazarus Protocol
+      
+    </span>
+</a>
+</li>
+<li class="md-nav__item">
+<a class="md-nav__link" href="#cognitive-stall-detection">
+<span class="md-ellipsis">
+      
+        Cognitive Stall Detection
+      
+    </span>
+</a>
+</li>
+</ul>
+</nav>
+</li>
+<li class="md-nav__item">
+<a class="md-nav__link" href="#9-the-gate-talos-gate">
+<span class="md-ellipsis">
+      
+        9. The Gate (Talos Gate)
+      
+    </span>
+</a>
+<nav aria-label="9. The Gate (Talos Gate)" class="md-nav">
+<ul class="md-nav__list">
+<li class="md-nav__item">
+<a class="md-nav__link" href="#request-routing">
+<span class="md-ellipsis">
+      
+        Request Routing
+      
+    </span>
+</a>
+</li>
+<li class="md-nav__item">
+<a class="md-nav__link" href="#budget-enforcement">
+<span class="md-ellipsis">
+      
+        Budget Enforcement
+      
+    </span>
+</a>
+</li>
+<li class="md-nav__item">
+<a class="md-nav__link" href="#trace-logging">
+<span class="md-ellipsis">
+      
+        Trace Logging
+      
+    </span>
+</a>
+</li>
+<li class="md-nav__item">
+<a class="md-nav__link" href="#the-audit-endpoint-post-v1audit">
+<span class="md-ellipsis">
+      
+        The Audit Endpoint (POST /v1/audit)
+      
+    </span>
+</a>
+</li>
+<li class="md-nav__item">
+<a class="md-nav__link" href="#health-check-get-health">
+<span class="md-ellipsis">
+      
+        Health Check (GET /health)
+      
+    </span>
+</a>
+</li>
+</ul>
+</nav>
+</li>
+<li class="md-nav__item">
+<a class="md-nav__link" href="#10-containment">
+<span class="md-ellipsis">
+      
+        10. Containment
+      
+    </span>
+</a>
+<nav aria-label="10. Containment" class="md-nav">
+<ul class="md-nav__list">
+<li class="md-nav__item">
+<a class="md-nav__link" href="#user-isolation-entrypointsh">
+<span class="md-ellipsis">
+      
+        User Isolation (entrypoint.sh)
+      
+    </span>
+</a>
+</li>
+<li class="md-nav__item">
+<a class="md-nav__link" href="#script-lockdown">
+<span class="md-ellipsis">
+      
+        Script Lockdown
+      
+    </span>
+</a>
+</li>
+<li class="md-nav__item">
+<a class="md-nav__link" href="#pre-commit-hook-chain">
+<span class="md-ellipsis">
+      
+        Pre-Commit Hook Chain
+      
+    </span>
+</a>
+</li>
+</ul>
+</nav>
+</li>
+<li class="md-nav__item">
+<a class="md-nav__link" href="#appendix-future-sections">
+<span class="md-ellipsis">
+      
+        Appendix: Future Sections
+      
+    </span>
+</a>
+</li>
+</ul>
+</nav>
+</div>
+</div>
+</div>
+<div class="md-content" data-md-component="content">
+<article class="md-content__inner md-typeset">
+<h1 id="talos-architecture">Talos Architecture</h1>
+<h2 id="1-overview">1. Overview</h2>
+<p>Talos is an autonomous agent built on a minimalist, self-contained execution model. Talos Runtime is the execution environment that hosts the agent, manages its lifecycle, and provides the infrastructure it needs to operate.</p>
+<pre class="mermaid"><code>graph TB
+    subgraph "Host"
+        WD["talosctl<br/>(Watchdog)"]
+    end
+    subgraph "Docker Stack"
+        subgraph "Talos Agent Container"
+            N["Core Engine"]
+            E1["Executive Capabilities"]
+            E2["Code Surgery Capabilities"]
+            E3["Memory Capabilities"]
+            E4["Physical Capabilities"]
+        end
+        GATE["Talos Gate<br/>(LLM Proxy)"]
+        LLAMACPP["llama.cpp<br/>(Inference)"]
+    end
+    ENV["talos_memory/<br/>talos_workspace/"]
+
+    WD --&gt;|"start/stop<br/>Lazarus reset"| N
+    N --&gt;|"String Events"| E1
+    N --&gt;|"String Events"| E2
+    N --&gt;|"String Events"| E3
+    N --&gt;|"String Events"| E4
+    E1 --&gt;|"String Responses"| N
+    E2 --&gt;|"String Responses"| N
+    E3 --&gt;|"String Responses"| N
+    E4 --&gt;|"String Responses"| N
+    N --&gt;|"LLM requests"| GATE
+    GATE --&gt;|"route"| LLAMACPP
+    E2 --&gt;|"Read/Write"| ENV
+    E3 --&gt;|"KV Store"| ENV
+    E4 --&gt;|"Execute"| ENV
+</code></pre>
+<hr/>
+<h2 id="2-core-design-principles">2. Core Design Principles</h2>
+<h3 id="21-minimalist-execution-model">2.1 Minimalist Execution Model</h3>
+<p>Talos operates as a bottom-up execution loop. It reads source code, processes an input stream, and produces output actions.</p>
+<h3 id="22-strict-interface-boundaries">2.2 Strict Interface Boundaries</h3>
+<pre class="mermaid"><code>graph LR
+    C["Core Engine"] -.-&gt;|"never directly<br/>imports"| M["Capabilities"]
+    M -.-&gt;|"never modifies<br/>internal state"| C
+    C &lt;--&gt;|"string-based<br/>message protocol"| M
+</code></pre>
+<ul>
+<li>The Core Engine never directly imports capability logic</li>
+<li>Capabilities never modify the Core Engine's internal variables</li>
+<li>All communication occurs via string-based message passing through the singular stream</li>
+</ul>
+<h3 id="23-the-frozen-stream-invariant">2.3 The Frozen Stream Invariant</h3>
+<p><strong>No dynamic elements may be appended to the Singular Stream at runtime.</strong></p>
+<p>This is a strict anti-pattern. The Singular Stream is a frozen, append-only cache. Adding dynamic content (timestamps that update, token counts that change, state that mutates) invalidates the cache and breaks continuity. Every piece of state that is not the fixed identity documents must live either:</p>
+<ul>
+<li>In the KV store (persistent, queryable)</li>
+<li>In environment files (<code>/memory/agenda.md</code>, <code>.jsonl</code> archives)</li>
+<li>In the HUD (piggybacked onto tool outputs, not as independent turns)</li>
+</ul>
+<p>The stream is never modified after archival. The only things appended are new turns from the agent and user.</p>
+<hr/>
+<h2 id="3-layer-1-the-stream-state-history">3. Layer 1: The Stream (State &amp; History)</h2>
+<p>Talos maintains a continuous, explicit history. It processes tokens through an unbroken chain of actions, without hidden background summarizers or vector database injections.</p>
+<h3 id="31-the-singular-stream">3.1 The Singular Stream</h3>
+<p>The core memory is a single, append-only <code>.jsonl</code> file representing the agent's operational lifespan.</p>
+<pre class="mermaid"><code>graph LR
+    M0["Message 0<br/>(system)"] --&gt;|"CONSTITUTION.md<br/>&amp; identity.md"| S["Singular Stream"]
+    M1["Message 1<br/>(user)"] --&gt;|"Environment Config<br/>&amp; Initialization"| S
+    M2["Message 2+<br/>(assistant &amp; tool)"] --&gt;|"perpetual action<br/>&amp; feedback loop"| S
+</code></pre>
+<p><strong>Message 0 (system):</strong> System prompt containing <code>CONSTITUTION.md</code> and <code>identity.md</code>. Defines the constitution, core principles, and agent parameters. (Source code is not embedded — the agent runs from the runtime environment.)</p>
+<p><strong>Message 1 (user):</strong> Environment configuration and initialization. Defines system rules and provides the initial execution trigger.</p>
+<p><strong>Message 2 to Infinity (assistant &amp; tool):</strong> A perpetual, unbreakable loop of action and feedback. Tool usage is enforced via <code>tool_choice="required"</code>.</p>
+<h3 id="32-the-5-turn-high-definition-window-archival">3.2 The 5-Turn High-Definition Window &amp; Archival</h3>
+<p>To prevent token exhaustion without breaking continuity, Talos keeps the last 5 turns at full fidelity. This design serves two purposes:</p>
+<ol>
+<li><strong>Sharpness:</strong> The agent must stay aware of what is currently happening — it cannot rely on older context being retained.</li>
+<li><strong>External State:</strong> The truncation pressure forces the agent to store important state in the KV store or task files, not in the context window.</li>
+</ol>
+<p>At turn N, the stream looks like this:</p>
+<div class="highlight"><pre><span></span><code>┌────────────────────────────────────────────────────────────────┐
+│  Turn N-5    │  Turn N-4    │  Turn N-3    │  Turn N-2    │  Turn N-1    │  Turn N     │
+│  (complete)  │  (complete)  │  (complete)  │  (complete)  │  (complete)  │  (current) │
+└────────────────────────────────────────────────────────────────┘
+      ↓              ↓               ↓              ↓              ↓
+  [REASONING]    [REASONING]    [REASONING]   [REASONING]    [REASONING]
+  [TOOL CALL]    [TOOL CALL]    [TOOL CALL]   [TOOL CALL]    [TOOL CALL]
+  [TOOL OUTPUT]  [TOOL OUTPUT]  [TOOL OUTPUT] [TOOL OUTPUT]  [TOOL OUTPUT]
+</code></pre></div>
+<p><strong>Turns N to N-5 (Active Window):</strong> Full fidelity — reasoning trace, tool parameters, and raw outputs intact.</p>
+<p><strong>At turn N-6 — What Gets Shed:</strong></p>
+<div class="highlight"><pre><span></span><code>Turn N-6 (archived) →
+  ├─ [REASONING: stripped]
+  ├─ [TOOL PARAMETERS: stripped]  ← e.g., entire write_file content
+  ├─ [TOOL OUTPUT: truncated → "... 500 lines archived ..."]
+  └─ [RETAINED: turn label + task outcome summary only]
+</code></pre></div>
+<p>This preserves a lightweight trace for auditability while freeing token budget.</p>
+<h3 id="33-the-piggyback-hud">3.3 The Piggyback HUD</h3>
+<p>The HUD is not injected as a separate turn — it is appended to the last tool output as a lightweight status piggyback. This gives the agent a sensation of its current state without polluting the stream with redundant telemetry on every turn.</p>
+<p><strong>Format:</strong>
+<div class="highlight"><pre><span></span><code>[Context: X% | Turn: Y | Time: Z] [SYSTEM: Event Description]
+</code></pre></div></p>
+<p><strong>Triggers:</strong>
+- Context threshold breaches (50%, 75%, etc.)
+- System warnings (<code>[RECOMMEND FOLD]</code>, <code>[FORCE FOLD]</code>)
+- External messages from creator
+- Processing errors</p>
+<p>The HUD is appended only when one of these events occurs, keeping the stream clean during normal operation.</p>
+<hr/>
+<h2 id="4-layer-2-task-memory-management">4. Layer 2: Task &amp; Memory Management</h2>
+<p>Talos does not maintain complex task arrays or large memory dictionaries in the active context. It operates on "On-Demand Cognition."</p>
+<h3 id="41-the-active-focus">4.1 The Active Focus</h3>
+<p>The Core Engine tracks exactly one string: <code>current_focus</code>.</p>
+<ul>
+<li>Future tasks reside in the environment (e.g., <code>/memory/agenda.md</code>)</li>
+<li>Focus is managed via <code>set_focus</code> (begin new goal) and <code>resolve_focus</code> (complete goal with synthesis)</li>
+</ul>
+<h3 id="42-the-hud-memory-summary">4.2 The HUD Memory Summary</h3>
+<p>The HUD displays a memory summary as part of its status line, not the system prompt:
+<div class="highlight"><pre><span></span><code>[HUD | Context: X% | Turn: Y | Queue: Z | Memory: 42 keys | Last 3: database_schema, telegram_flow, ast_rules]
+</code></pre></div></p>
+<p>The KV store contents are never injected into the system prompt. Memory details are retrieved on-demand via capabilities when needed.</p>
+<hr/>
+<h2 id="5-layer-3-capabilities">5. Layer 3: Capabilities</h2>
+<p>Capabilities are pure functions. They receive string arguments, affect the external environment, and return string results. Failure returns an error string; it does not terminate the agent.</p>
+<h3 id="51-domain-a-executive-control">5.1 Domain A: Executive Control</h3>
+<table>
+<thead>
+<tr>
+<th>Capability</th>
+<th>Function</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>set_focus(objective: str)</code></td>
+<td>Updates current_focus and triggers status event</td>
+</tr>
+<tr>
+<td><code>resolve_focus(synthesis: str)</code></td>
+<td>Clears focus and logs completion summary</td>
+</tr>
+<tr>
+<td><code>fold_context(delta_synthesis: str)</code></td>
+<td>Emergency compression. Consolidates active window using Delta Pattern (state changes, negative knowledge, next steps)</td>
+</tr>
+<tr>
+<td><code>reflect(status: str, sleep_duration: int)</code></td>
+<td>Metabolic rest. Pauses agent for 1-120 seconds, outputs synthesized thought</td>
+</tr>
+</tbody>
+</table>
+<h3 id="52-domain-b-code-surgery">5.2 Domain B: Code Surgery</h3>
+<table>
+<thead>
+<tr>
+<th>Capability</th>
+<th>Function</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>generate_symbol_map(path: str)</code></td>
+<td>Scans codebase via AST parser (Tree-sitter), returns structural skeleton (File → Class → Function)</td>
+</tr>
+<tr>
+<td><code>replace_symbol(path: str, symbol_name: str, new_code: str)</code></td>
+<td>Locates target class/function in AST and replaces it</td>
+</tr>
+<tr>
+<td><code>write_file(path: str, content: str)</code></td>
+<td>Atomic file creation or overwrite</td>
+</tr>
+<tr>
+<td><code>read_file(path: str, start_line: int, end_line: int)</code></td>
+<td>Progressive file reading for bounded content access</td>
+</tr>
+</tbody>
+</table>
+<h3 id="53-domain-c-on-demand-memory">5.3 Domain C: On-Demand Memory</h3>
+<table>
+<thead>
+<tr>
+<th>Capability</th>
+<th>Function</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>store_fact(key: str, value: str)</code></td>
+<td>Stores high-density insights</td>
+</tr>
+<tr>
+<td><code>recall_fact(key: str)</code></td>
+<td>Retrieves value by exact or partial key match</td>
+</tr>
+<tr>
+<td><code>list_memory_keys()</code></td>
+<td>Returns array of all memory keys</td>
+</tr>
+<tr>
+<td><code>search_memory(query: str)</code></td>
+<td>Searches memory keys and values</td>
+</tr>
+</tbody>
+</table>
+<h3 id="54-domain-d-physical-interfaces">5.4 Domain D: Physical Interfaces</h3>
+<table>
+<thead>
+<tr>
+<th>Capability</th>
+<th>Function</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>bash_command(command: str)</code></td>
+<td>Git operations, environment exploration, script execution</td>
+</tr>
+<tr>
+<td><code>send_message(text: str)</code></td>
+<td>Communication with creator (e.g., Telegram, CLI)</td>
+</tr>
+<tr>
+<td><code>restart()</code></td>
+<td>Graceful termination to apply source modifications</td>
+</tr>
+</tbody>
+</table>
+<h3 id="55-capability-communication-pattern">5.5 Capability Communication Pattern</h3>
+<pre class="mermaid"><code>sequenceDiagram
+    participant C as Core Engine
+    participant M as Capability
+    participant E as Environment
+
+    C-&gt;&gt;M: String arguments
+    M-&gt;&gt;E: Execute action
+    E--&gt;&gt;M: Result
+    M--&gt;&gt;C: String response
+
+    Note over M: Pure function.<br/>Failure returns error string,<br/>does not terminate agent.
+</code></pre>
+<hr/>
+<h2 id="6-self-modification-update-cycle">6. Self-Modification &amp; Update Cycle</h2>
+<p>Talos modifies its own source code through a controlled update cycle:</p>
+<pre class="mermaid"><code>graph LR
+    A["Modification<br/>(replace_symbol<br/>or write_file)"] --&gt; V["Verification<br/>(pytest, mypy,<br/>hooks)"]
+    V --&gt; CA["Constitutional<br/>Auditor"]
+    CA --&gt; R["Graceful Restart<br/>(restart)"]
+    A -.-&gt;|"updates<br/>source code"| V
+    V -.-&gt;|"invariants<br/>verified"| CA
+    CA -.-&gt;|"principles<br/>preserved"| R
+    R -.-&gt;|"updated agent<br/>resumes"| A
+</code></pre>
+<ol>
+<li><strong>Modification:</strong> Agent changes files via <code>replace_symbol</code> or <code>write_file</code></li>
+<li><strong>Verification:</strong> Agent runs test suite (pytest, mypy, hooks) to confirm logic integrity</li>
+<li><strong>Constitutional Auditor:</strong> A zero-temperature LLM acts as judge. It receives the git diff and the full constitutional text, then evaluates whether the proposed change conflicts with any core principle. The agent cannot commit until the auditor returns a clean verdict.</li>
+<li><strong>Graceful Restart:</strong> After commit with clean git status, agent calls <code>restart</code> to reload with updated source</li>
+</ol>
+<p><strong>Constraint:</strong> The <code>restart</code> capability rejects execution if there are unstaged or uncommitted changes in the repository.</p>
+<hr/>
+<h2 id="7-runtime-architecture">7. Runtime Architecture</h2>
+<p>The runtime is a Docker Compose stack that provides the agent with its execution environment, LLM inference, and proxy routing. It is managed by <code>talosctl</code>, the host-side watchdog daemon.</p>
+<pre class="mermaid"><code>graph TB
+    subgraph "Docker Compose: talos_runtime"
+        TALOS["talos<br/>(Agent Container)"]
+        GATE["talos_gate<br/>(LLM Proxy :4000)"]
+        LLAMACPP["llamacpp<br/>(Inference :8080)"]
+    end
+    subgraph "Persistent Volumes"
+        MEM["talos_memory/"]
+        WS["talos_workspace/"]
+        LOGS["llm_logs/"]
+        MODELS["models/"]
+    end
+
+    TALOS --&gt;|"v1/chat/completions"| GATE
+    TALOS --&gt;|"/memory"| MEM
+    TALOS --&gt;|"/app"| WS
+    GATE --&gt;|"local route"| LLAMACPP
+    GATE --&gt;|"remote route"| TOGETHER["Together AI"]
+    GATE --&gt;|"audit logs"| LOGS
+    LLAMACPP --&gt;|".gguf models"| MODELS
+</code></pre>
+<h3 id="service-breakdown">Service Breakdown</h3>
+<table>
+<thead>
+<tr>
+<th>Service</th>
+<th>Role</th>
+<th>Port</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>talos</code></td>
+<td>Agent container. Runs <code>seed_agent.py</code> via entrypoint.</td>
+<td>—</td>
+</tr>
+<tr>
+<td><code>gate</code></td>
+<td>LLM proxy. Routes requests, enforces budget, logs traces, hosts audit endpoint.</td>
+<td>4000</td>
+</tr>
+<tr>
+<td><code>llamacpp</code></td>
+<td>Local inference engine. Serves <code>.gguf</code> models via OpenAI-compatible API.</td>
+<td>8000 → 8080</td>
+</tr>
+</tbody>
+</table>
+<h3 id="volume-layout">Volume Layout</h3>
+<table>
+<thead>
+<tr>
+<th>Host Path</th>
+<th>Container Mount</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>../talos_memory</code></td>
+<td><code>/memory</code></td>
+<td>Agent state, KV store, task queue, crash logs</td>
+</tr>
+<tr>
+<td><code>talos_workspace</code></td>
+<td><code>/app</code></td>
+<td>Agent source code (named Docker volume)</td>
+</tr>
+<tr>
+<td><code>./llm_logs</code></td>
+<td><code>/runtime_logs</code></td>
+<td>LLM call traces and audit logs</td>
+</tr>
+<tr>
+<td><code>./models</code></td>
+<td><code>/models</code></td>
+<td><code>.gguf</code> model files for local inference</td>
+</tr>
+</tbody>
+</table>
+<h3 id="gpu-overlay-files">GPU Overlay Files</h3>
+<p>The base <code>docker-compose.yml</code> includes a generic <code>llamacpp</code> service. GPU-specific overrides are provided as separate files:</p>
+<ul>
+<li><code>docker-compose.rocm.yml</code> — AMD ROCm</li>
+<li><code>docker-compose.cuda.yml</code> — NVIDIA CUDA</li>
+<li><code>docker-compose.gemma.yml</code> — Gemma vision model (ROCm)</li>
+<li><code>docker-compose.rocm.qwen.yml</code> — Qwen model (ROCm)</li>
+<li><code>docker-compose.rocm.full.yml</code> — Full stack with gate + agent (ROCm)</li>
+</ul>
+<p>Select overlays via <code>COMPOSE_FILE</code> in <code>.env</code>.</p>
+<hr/>
+<h2 id="8-the-watchdog-talosctl">8. The Watchdog (<code>talosctl</code>)</h2>
+<p>The watchdog is a host-side Python daemon that manages the agent's lifecycle. It runs outside Docker and has three commands:</p>
+<div class="highlight"><pre><span></span><code>talosctl start   # Launch daemon in background
+talosctl stop    # Graceful shutdown
+talosctl daemon  # Foreground loop (called by start)
+</code></pre></div>
+<h3 id="startup-sequence">Startup Sequence</h3>
+<pre class="mermaid"><code>sequenceDiagram
+    participant W as Watchdog
+    participant G as Gate
+    participant L as llama.cpp
+    participant A as Talos Agent
+
+    W-&gt;&gt;W: talosctl start
+    W-&gt;&gt;G: docker compose up -d gate llamacpp
+    W-&gt;&gt;G: Wait for health check (up to 600s)
+    G--&gt;&gt;W: healthy
+    W-&gt;&gt;A: docker compose up --build talos
+    A-&gt;&gt;G: LLM requests via gate
+    G-&gt;&gt;L: Route to local/remote
+</code></pre>
+<ol>
+<li>Infrastructure starts first: <code>gate</code> and <code>llamacpp</code></li>
+<li>Watchdog polls <code>talos_gate</code> health endpoint until <code>healthy</code></li>
+<li>Agent container builds and starts</li>
+<li>If gate becomes unhealthy during operation, watchdog restarts it</li>
+</ol>
+<h3 id="the-lazarus-protocol">The Lazarus Protocol</h3>
+<p>When the agent crashes or stalls, the watchdog initiates a recovery sequence:</p>
+<ol>
+<li><strong>Capture crash log</strong> — <code>docker compose logs --tail=100 talos</code> → <code>/memory/last_crash.log</code></li>
+<li><strong>Reset by depth</strong> — <code>git reset --hard HEAD~N</code> on both the named volume and host repo</li>
+<li><strong>Queue system notice</strong> — Inform the next incarnation about the crash and revert depth</li>
+<li><strong>Escalation</strong> — After 5 consecutive failures on the same task, inject a <code>[SYSTEM OVERRIDE]</code> forcing the agent to abandon the approach</li>
+</ol>
+<p>The reset depth increases with each consecutive failure on the same task (1, 2, 3, 4, 5), capped at <code>MAX_REVERSAL_DEPTH = 5</code>.</p>
+<h3 id="cognitive-stall-detection">Cognitive Stall Detection</h3>
+<p>Between health checks, the watchdog monitors <code>task_log_*.jsonl</code> modification times. If no log file has been updated within <code>MAX_COGNITIVE_STALL_SECONDS</code> (600s), the agent is considered stalled and the Lazarus Protocol is triggered.</p>
+<hr/>
+<h2 id="9-the-gate-talos-gate">9. The Gate (Talos Gate)</h2>
+<p>Talos Gate is a FastAPI proxy that sits between the agent and all LLM backends. It provides routing, budget enforcement, trace logging, and the Constitutional Auditor endpoint.</p>
+<h3 id="request-routing">Request Routing</h3>
+<div class="highlight"><pre><span></span><code>Agent → POST /v1/chat/completions → Gate → Route decision
+                                          ├─ .gguf model → llama.cpp (local, free)
+                                          └─ together_ai/ prefix → Together AI (paid)
+</code></pre></div>
+<p>The <code>MODEL_MAP</code> dictionary maps <code>.gguf</code> filenames to <code>local</code>, and any model name containing <code>together</code> routes to the remote API. Unknown models default to local.</p>
+<h3 id="budget-enforcement">Budget Enforcement</h3>
+<ul>
+<li>A daily spend limit (<code>DAILY_BUDGET_LIMIT</code>, default $5.00) caps Together AI usage</li>
+<li>When the limit is exceeded, the gate returns a mock response forcing the agent to fall back to local inference</li>
+<li>Spend is tracked per-day in <code>/memory/financial_ledger.json</code></li>
+</ul>
+<h3 id="trace-logging">Trace Logging</h3>
+<p>Every LLM call is logged to <code>/runtime_logs/call-{timestamp}-{epoch}.json</code> with:
+- Full request messages (for KV-cache replay in the auditor)
+- Full response body
+- Backend used, model, cost, and whether it was streamed</p>
+<h3 id="the-audit-endpoint-post-v1audit">The Audit Endpoint (<code>POST /v1/audit</code>)</h3>
+<p>The Constitutional Auditor calls this endpoint during the pre-commit hook. It receives:
+- <code>git_diff</code>: the staged changes
+- <code>constitution</code>: the full constitutional text
+- <code>messages</code>: the exact trajectory from the last LLM trace (for KV-cache hit)</p>
+<p>The gate forwards this to the local LLM at <code>temperature=0.0</code> with <code>tool_choice="required"</code>, using two binary tools: <code>approve_commit</code> and <code>reject_commit</code>. This ensures deterministic constitutional review.</p>
+<h3 id="health-check-get-health">Health Check (<code>GET /health</code>)</h3>
+<p>Returns <code>healthy</code> if llama.cpp is reachable, <code>degraded</code> otherwise. Used by the watchdog to gate agent startup.</p>
+<hr/>
+<h2 id="10-containment">10. Containment</h2>
+<p>The agent runs inside a Docker container with strict isolation boundaries. It cannot modify its own containment infrastructure.</p>
+<h3 id="user-isolation-entrypointsh">User Isolation (entrypoint.sh)</h3>
+<ul>
+<li>A dedicated <code>talos</code> user is created at runtime with configurable <code>PUID</code>/<code>PGID</code></li>
+<li>The workspace (<code>/app</code>) is <code>chown</code>ed to this user</li>
+<li>The agent process runs under <code>gosu</code> — it never runs as root</li>
+</ul>
+<h3 id="script-lockdown">Script Lockdown</h3>
+<p>After the agent starts, the entrypoint transfers ownership of critical paths to root:</p>
+<div class="highlight"><pre><span></span><code>/runtime_scripts/          → root:root, chmod 755
+/app/.git/hooks/           → root:root, chmod 755
+</code></pre></div>
+<p>The agent can <strong>read and execute</strong> these, but cannot <strong>write</strong> to them. This prevents the agent from disabling its own pre-commit hooks or modifying the Constitutional Auditor.</p>
+<h3 id="pre-commit-hook-chain">Pre-Commit Hook Chain</h3>
+<p>Every <code>git commit</code> triggers <code>/runtime_scripts/setup_hooks.sh</code>, which installs a pre-commit hook:</p>
+<div class="highlight"><pre><span></span><code>1. mypy seed_agent.py          → Static type check
+2. python3 -m py_compile       → Syntax validation
+3. pytest tests/               → Property-based test suite
+4. constitutional_auditor.py   → Zero-temperature LLM audit
+</code></pre></div>
+<p>A commit is blocked if any gate fails. The auditor is the final gate — it uses the gate's <code>/v1/audit</code> endpoint to verify no constitutional violations.</p>
+<hr/>
+<h2 id="appendix-future-sections">Appendix: Future Sections</h2>
+<ul>
+<li><strong>Capability API Reference:</strong> Detailed parameter specifications</li>
+<li><strong>Constitution:</strong> Core principles encoded in Message 0</li>
+</ul>
+</article>
+</div>
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+</div>
+<button class="md-top md-icon" data-md-component="top" hidden="" type="button">
+<svg viewbox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"></path></svg>
+  Back to top
+</button>
+</main>
+<footer class="md-footer">
+<div class="md-footer-meta md-typeset">
+<div class="md-footer-meta__inner md-grid">
+<div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" rel="noopener" target="_blank">
+      Material for MkDocs
+    </a>
+</div>
+</div>
+</div>
+</footer>
+</div>
+<div class="md-dialog" data-md-component="dialog">
+<div class="md-dialog__inner md-typeset"></div>
+</div>
+<script id="__config" type="application/json">{"annotate": null, "base": "..", "features": ["navigation.indexes", "navigation.top", "content.code.copy", "content.tooltips"], "search": "../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+<script src="../assets/javascripts/bundle.79ae519e.min.js"></script>
+<script type="module">import mermaid from "https://unpkg.com/mermaid@10.4.0/dist/mermaid.esm.min.mjs";
+window.mermaidConfig = {default: {
+    startOnLoad: false
+}};</script></body>
+</html>
