@@ -11,18 +11,18 @@ import (
 
 // Message represents an LLM API message
 type Message struct {
-	Role       string         `json:"role"`
-	Content    string         `json:"content,omitempty"`
-	ToolCalls  []ToolCall     `json:"tool_calls,omitempty"`
-	ToolCallID string         `json:"tool_call_id,omitempty"`
-	Name       string         `json:"name,omitempty"`
+	Role       string     `json:"role"`
+	Content    string     `json:"content,omitempty"`
+	ToolCalls  []ToolCall `json:"tool_calls,omitempty"`
+	ToolCallID string     `json:"tool_call_id,omitempty"`
+	Name       string     `json:"name,omitempty"`
 }
 
 // ToolCall represents a tool call from the LLM
 type ToolCall struct {
-	ID        string                 `json:"id"`
-	Type      string                 `json:"type"`
-	Function  FunctionCall           `json:"function"`
+	ID       string                 `json:"id"`
+	Type     string                 `json:"type"`
+	Function FunctionCall           `json:"function"`
 	Arguments map[string]interface{} `json:"-"` // parsed from Function.Arguments
 }
 
@@ -43,17 +43,6 @@ type StreamManager struct {
 	queuedNotices   []string
 	state           map[string]interface{}
 	constitutionMgr *ConstitutionManager
-}
-
-// StreamConfig holds stream-specific configuration
-type StreamConfig struct {
-	ContextThreshold       float64
-	ActiveWindow           int
-	MaxContextTokens       int
-	ShedToolOutputMaxChars int
-	GateURL                string
-	ConstitutionPath       string
-	IdentityPath           string
 }
 
 // NewStreamManager creates a new StreamManager
@@ -78,24 +67,30 @@ func (sm *StreamManager) Think(req ThinkRequest) (*ThinkResponse, error) {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
 
-	// Load constitution if not already loaded
-	if err := sm.constitutionMgr.Load(); err != nil {
+	// Reload constitution only if hash has changed (Frozen Stream Invariant)
+	if changed, err := sm.constitutionMgr.ReloadIfChanged(); err != nil {
 		return nil, fmt.Errorf("load constitution: %w", err)
+	} else if changed {
+		sm.state["constitution_reloaded"] = true
 	}
 
-	// Build the payload (system prompt + stream + HUD)
+	// Build the payload (system prompt + stream + HUD piggybacked)
 	messages := sm.buildPayload(req)
-
-	// Check if we need to enforce a fold
-	if sm.contextPct > sm.cfg.ContextThreshold {
-		messages, req.Tools = enforceFold(messages, req.Tools)
-	}
 
 	// Build the API request
 	apiReq := GateRequest{
 		Model:    "talos",
 		Messages: messages,
 		Tools:    req.Tools,
+	}
+
+	// Check if we need to enforce a fold
+	if sm.contextPct > sm.cfg.ContextThreshold {
+		apiReq.Messages, apiReq.Tools = enforceFold(apiReq.Messages, req.Tools)
+		apiReq.ToolChoice = map[string]string{"type": "function", "name": "fold_context"}
+		// Inject fold urgency notice
+		sm.queuedNotices = append(sm.queuedNotices,
+			fmt.Sprintf("Context at %.0f%%. You MUST use fold_context immediately.", sm.contextPct*100))
 	}
 
 	// Send to Gate
@@ -146,9 +141,10 @@ func (sm *StreamManager) Think(req ThinkRequest) (*ThinkResponse, error) {
 
 // GateRequest is the request to the Gate API
 type GateRequest struct {
-	Model    string    `json:"model"`
-	Messages []Message `json:"messages"`
-	Tools    []ToolDef `json:"tools,omitempty"`
+	Model      string                 `json:"model"`
+	Messages   []Message              `json:"messages"`
+	Tools      []ToolDef              `json:"tools,omitempty"`
+	ToolChoice interface{}            `json:"tool_choice,omitempty"`
 }
 
 // GateResponse is the response from the Gate API
@@ -157,7 +153,7 @@ type GateResponse struct {
 		Message struct {
 			Role      string     `json:"role"`
 			Content   string     `json:"content"`
-			ToolCalls []ToolCall `json:"tool_calls,omitempty"`
+			ToolCalls []ToolCall  `json:"tool_calls,omitempty"`
 		} `json:"message"`
 	} `json:"choices"`
 	Usage struct {
@@ -200,7 +196,8 @@ func (sm *StreamManager) sendToGate(req GateRequest) (*GateResponse, error) {
 }
 
 // buildPayload constructs the message array for the LLM API call.
-// Applies shedding to the current stream, then prepends system prompt and appends the HUD.
+// Applies shedding to the current stream, then prepends system prompt.
+// The HUD is piggybacked onto the last message content, never as a separate message.
 func (sm *StreamManager) buildPayload(req ThinkRequest) []Message {
 	// Start with system prompt
 	systemMsg := Message{
@@ -211,7 +208,7 @@ func (sm *StreamManager) buildPayload(req ThinkRequest) []Message {
 	// Apply shedding to current messages
 	shedMessages := sm.applyShedding(sm.messages)
 
-	// Build HUD
+	// Build HUD string
 	hudStr := sm.formatHUD(
 		req.HUDData,
 		sm.contextPct,
@@ -221,20 +218,21 @@ func (sm *StreamManager) buildPayload(req ThinkRequest) []Message {
 	)
 	sm.queuedNotices = nil // clear queued notices after formatting
 
-	// Append HUD as a system message at the end
-	hudMsg := Message{
-		Role:    "system",
-		Content: hudStr,
-	}
-
-	// Construct final payload
-	messages := []Message{systemMsg}
-	messages = append(messages, shedMessages...)
-	messages = append(messages, Message{
+	// Add focus as user message
+	focusMsg := Message{
 		Role:    "user",
 		Content: req.Focus,
-	})
-	messages = append(messages, hudMsg)
+	}
+
+	// Construct payload: system + shed stream + focus
+	messages := []Message{systemMsg}
+	messages = append(messages, shedMessages...)
+	messages = append(messages, focusMsg)
+
+	// Piggyback HUD onto the last message content (never as a separate message)
+	if len(messages) > 0 && hudStr != "" {
+		messages[len(messages)-1].Content += "\n" + hudStr
+	}
 
 	return messages
 }
@@ -253,15 +251,17 @@ func (sm *StreamManager) applyShedding(messages []Message) []Message {
 	frozenCount := 2
 	activeWindow := sm.cfg.ActiveWindow
 
-	// Calculate how many messages to keep at full fidelity
-	// The last `activeWindow` turns should be kept intact
-	messagesToKeep := frozenCount + (activeWindow * 2) // *2 for user+assistant pairs
+	// Count messages from the end to determine which are in the active window.
+	// We keep the last `activeWindow * 2` messages at full fidelity as a heuristic
+	// (each "turn" typically has an assistant + tool_result pair).
+	// Messages beyond that boundary are shed.
+	activeMessageCount := activeWindow * 2
 
-	if len(messages) <= messagesToKeep {
-		return messages // nothing to shed
+	if len(messages) <= frozenCount+activeMessageCount {
+		return messages // all within window
 	}
 
-	result := make([]Message, 0, messagesToKeep+1)
+	result := make([]Message, 0, len(messages))
 
 	// Keep frozen prefix
 	for i := 0; i < frozenCount; i++ {
@@ -269,17 +269,13 @@ func (sm *StreamManager) applyShedding(messages []Message) []Message {
 	}
 
 	// Shed messages between frozen prefix and active window
-	shedStart := frozenCount
-	shedEnd := len(messages) - messagesToKeep + frozenCount
-
-	for i := shedStart; i < shedEnd; i++ {
-		msg := messages[i]
-		shedMsg := sm.shedMessage(msg)
-		result = append(result, shedMsg)
+	shedBoundary := len(messages) - activeMessageCount
+	for i := frozenCount; i < shedBoundary; i++ {
+		result = append(result, sm.shedMessage(messages[i]))
 	}
 
 	// Keep active window at full fidelity
-	for i := shedEnd; i < len(messages); i++ {
+	for i := shedBoundary; i < len(messages); i++ {
 		result = append(result, messages[i])
 	}
 
@@ -309,8 +305,10 @@ func (sm *StreamManager) shedMessage(msg Message) Message {
 	case "tool":
 		// Truncate tool output
 		if len(msg.Content) > sm.cfg.ShedToolOutputMaxChars {
-			truncated := msg.Content[:sm.cfg.ShedToolOutputMaxChars]
-			msg.Content = truncated + "... output archived ..."
+			maxChars := sm.cfg.ShedToolOutputMaxChars
+			truncated := msg.Content[:maxChars]
+			archivedChars := len(msg.Content) - maxChars
+			msg.Content = fmt.Sprintf("%s\n[… %d chars archived]", truncated, archivedChars)
 		}
 	}
 	return msg
@@ -330,7 +328,7 @@ func (sm *StreamManager) formatHUD(hudData HUDData, contextPct float64, turn int
 	}
 
 	if len(hudData.LastKeys) > 0 {
-		hudParts = append(hudParts, fmt.Sprintf("Focus: %s", strings.Join(hudData.LastKeys, ", ")))
+		hudParts = append(hudParts, fmt.Sprintf("Last %d: %s", len(hudData.LastKeys), strings.Join(hudData.LastKeys, ", ")))
 	}
 
 	mainHUD := strings.Join(hudParts, " | ")
@@ -339,7 +337,7 @@ func (sm *StreamManager) formatHUD(hudData HUDData, contextPct float64, turn int
 	// System notices
 	if len(queuedNotices) > 0 {
 		for _, notice := range queuedNotices {
-			parts = append(parts, fmt.Sprintf("[SYSTEM: %s | Urgency: %s]", notice, hudData.Urgency))
+			parts = append(parts, fmt.Sprintf("[SYSTEM | %s | Urgency: %s]", notice, hudData.Urgency))
 		}
 	}
 
@@ -360,7 +358,7 @@ func enforceFold(messages []Message, tools []ToolDef) ([]Message, []ToolDef) {
 		foldedMessages = append(foldedMessages, messages[1]) // initialization
 	}
 
-	// Find last assistant message
+	// Find last assistant message for context continuity
 	for i := len(messages) - 1; i >= 0; i-- {
 		if messages[i].Role == "assistant" {
 			foldedMessages = append(foldedMessages, messages[i])
@@ -377,7 +375,7 @@ func enforceFold(messages []Message, tools []ToolDef) ([]Message, []ToolDef) {
 			"properties": map[string]interface{}{
 				"synthesis": map[string]interface{}{
 					"type":        "string",
-					"description": "A concise summary of the conversation",
+					"description": "A concise summary of the conversation using the DELTA pattern: State Delta, Negative Knowledge, Handoff",
 				},
 			},
 			"required": []string{"synthesis"},
@@ -392,9 +390,14 @@ func (sm *StreamManager) RecordToolResult(result ToolResultRequest) {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
 
+	content := result.Output
+	if !result.Success {
+		content = "[TOOL ERROR] " + content
+	}
+
 	msg := Message{
 		Role:       "tool",
-		Content:    result.Output,
+		Content:    content,
 		ToolCallID: result.ToolCallID,
 	}
 
@@ -412,27 +415,18 @@ func (sm *StreamManager) ApplyFold(synthesis string) {
 		return
 	}
 
-	// Keep only frozen prefix
+	// Keep only frozen prefix + synthesis as assistant message (no orphaned tool calls)
 	sm.messages = []Message{
 		sm.messages[0], // system prompt
 		sm.messages[1], // initialization
 		{
 			Role:    "assistant",
 			Content: synthesis,
-			ToolCalls: []ToolCall{
-				{
-					ID:   "fold_1",
-					Type: "function",
-					Function: FunctionCall{
-						Name:      "fold_context",
-						Arguments: fmt.Sprintf(`{"synthesis": %q}`, synthesis),
-					},
-				},
-			},
 		},
 	}
 
 	sm.turn++
+	sm.contextPct = 0.1 // Reset context after fold
 }
 
 // GetState returns authoritative state values
@@ -440,11 +434,35 @@ func (sm *StreamManager) GetState(keys []string) map[string]interface{} {
 	sm.mu.RLock()
 	defer sm.mu.RUnlock()
 
-	result := make(map[string]interface{})
-	for _, key := range keys {
-		if val, ok := sm.state[key]; ok {
-			result[key] = val
+	// Always include authoritative state values
+	authoritative := map[string]interface{}{
+		"context_pct":     sm.contextPct,
+		"turn":            sm.turn,
+		"tokens_used":     sm.tokensUsed,
+		"message_count":   len(sm.messages),
+		"queued_notices":  len(sm.queuedNotices),
+	}
+
+	// If specific keys requested, filter
+	if len(keys) > 0 {
+		result := make(map[string]interface{})
+		for _, key := range keys {
+			if val, ok := authoritative[key]; ok {
+				result[key] = val
+			} else if val, ok := sm.state[key]; ok {
+				result[key] = val
+			}
 		}
+		return result
+	}
+
+	// Return all authoritative + custom state
+	result := make(map[string]interface{})
+	for k, v := range authoritative {
+		result[k] = v
+	}
+	for k, v := range sm.state {
+		result[k] = v
 	}
 	return result
 }
@@ -473,20 +491,6 @@ func (sm *StreamManager) GetMessages() []Message {
 	result := make([]Message, len(sm.messages))
 	copy(result, sm.messages)
 	return result
-}
-
-// GetTurn returns the current turn count
-func (sm *StreamManager) GetTurn() int {
-	sm.mu.RLock()
-	defer sm.mu.RUnlock()
-	return sm.turn
-}
-
-// GetContextPct returns the current context percentage
-func (sm *StreamManager) GetContextPct() float64 {
-	sm.mu.RLock()
-	defer sm.mu.RUnlock()
-	return sm.contextPct
 }
 
 // parseArguments parses a JSON string into a map
