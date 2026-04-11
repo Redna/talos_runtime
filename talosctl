@@ -1,0 +1,261 @@
+#!/usr/bin/env python3
+import argparse
+import subprocess
+import os
+import signal
+import sys
+import time
+import shutil
+import glob
+import json
+import urllib.request
+from pathlib import Path
+
+# --- Configuration ---
+RUNTIME_DIR = Path(__file__).parent.resolve()
+ROOT = RUNTIME_DIR.parent
+AGENT_DIR = ROOT / "talos"
+MEMORY_DIR = ROOT / "talos_memory"
+RUN_DIR = Path("/tmp/talos-runtime")
+PID_FILE = RUN_DIR / "watchdog.pid"
+LOG_FILE = RUN_DIR / "watchdog.log"
+
+CRASH_LOG_PATH = MEMORY_DIR / "last_crash.log"
+STATS_FILE = MEMORY_DIR / ".runtime_stats.json"
+PENDING_NOTICES_PATH = MEMORY_DIR / "pending_system_notices.json"
+
+# Thresholds
+UPTIME_STABILITY_THRESHOLD = 60
+MAX_COGNITIVE_STALL_SECONDS = 600
+MAX_REVERSAL_DEPTH = 5
+
+def ensure_run_dir():
+    if not RUN_DIR.exists():
+        RUN_DIR.mkdir(parents=True, exist_ok=True)
+
+def load_runtime_stats():
+    if not STATS_FILE.exists():
+        return {"consecutive_failures": 0, "last_task_id": None}
+    try:
+        return json.loads(STATS_FILE.read_text())
+    except:
+        return {"consecutive_failures": 0, "last_task_id": None}
+
+def save_runtime_stats(stats):
+    STATS_FILE.write_text(json.dumps(stats, indent=2))
+
+def queue_system_notice(notice: str) -> None:
+    notices = []
+    if PENDING_NOTICES_PATH.exists():
+        try:
+            notices = json.loads(PENDING_NOTICES_PATH.read_text())
+        except: pass
+    notices.append(notice)
+    PENDING_NOTICES_PATH.write_text(json.dumps(notices, indent=2))
+
+def get_current_task_id():
+    queue_path = MEMORY_DIR / "task_queue.json"
+    if queue_path.exists():
+        try:
+            q = json.loads(queue_path.read_text())
+            if q: return q[0].get("task_id")
+        except: pass
+    return None
+
+def trigger_lazarus_reset(reason="Crash detected"):
+    stats = load_runtime_stats()
+    current_task = get_current_task_id()
+
+    if current_task == stats.get("last_task_id") and current_task is not None:
+        stats["consecutive_failures"] += 1
+    else:
+        stats["consecutive_failures"] = 1
+        stats["last_task_id"] = current_task
+
+    depth = min(stats["consecutive_failures"], MAX_REVERSAL_DEPTH)
+    print(f"\033[91m[DAEMON] LAZARUS PROTOCOL: {reason.upper()}. Reverting {depth} commit(s)...\033[0m", flush=True)
+
+    capture_crash_log()
+
+    # --- VOLUME RECOVERY ---
+    print(f"[DAEMON] Reverting code in named volume 'talos_workspace'...")
+
+    res = subprocess.run(
+        "docker run --rm -v talos_workspace:/app -w /app alpine/git rev-parse --short HEAD",
+        shell=True, capture_output=True, text=True
+    )
+    last_commit = res.stdout.strip() if res.stdout else "unknown"
+
+    subprocess.run(
+        f"docker run --rm -v talos_workspace:/app -w /app alpine/git reset --hard HEAD~{depth}",
+        shell=True
+    )
+    subprocess.run(
+        "docker run --rm -v talos_workspace:/app -w /app alpine/git clean -fd",
+        shell=True
+    )
+
+    # --- SYNC HOST FOR CONSISTENCY ---
+    subprocess.run(f"git reset --hard HEAD~{depth}", shell=True, cwd=AGENT_DIR)
+    subprocess.run("git clean -fd", shell=True, cwd=AGENT_DIR)
+
+    notice = f"[SYSTEM WATCHDOG]: Your previous incarnation crashed (Commit: {last_commit}).\n"
+    notice += f"Reason: {reason}\n"
+    notice += f"The watchdog has reverted your codebase by {depth} commit(s) to restore stability.\n"
+
+    if stats["consecutive_failures"] >= MAX_REVERSAL_DEPTH:
+        notice = (
+            "[SYSTEM OVERRIDE] You have triggered a fatal crash 5 times attempting this task. "
+            "The current approach is beyond your capabilities or structurally flawed. "
+            "You must ABANDON this specific code approach entirely. "
+            "Write a tool to request human intervention, or break the objective down into smaller, simpler sub-tasks."
+        )
+
+    queue_system_notice(notice)
+    save_runtime_stats(stats)
+
+def capture_crash_log():
+    """Capture last 100 events from the Spine event log, falling back to Docker logs."""
+    try:
+        resp = urllib.request.urlopen('http://localhost:4001/events?tail=100')
+        events = json.loads(resp.read())
+        with open(CRASH_LOG_PATH, 'w') as f:
+            json.dump(events, f, indent=2)
+        return
+    except Exception as e:
+        print(f"[DAEMON] Error capturing crash log from Spine: {e}")
+    # Fallback to Docker logs
+    compose_args = get_compose_args()
+    result = subprocess.run(f"docker compose {compose_args} logs --tail=100 talos", shell=True, cwd=RUNTIME_DIR, capture_output=True, text=True)
+    if result.stdout:
+        CRASH_LOG_PATH.write_text(result.stdout, encoding="utf-8")
+
+def get_compose_args():
+    full_rocm = RUNTIME_DIR / "docker-compose.rocm.full.yml"
+    if full_rocm.exists() and Path("/dev/kfd").exists(): return f"-f {full_rocm.name}"
+    base_compose = "-f docker-compose.yml"
+    if Path("/dev/kfd").exists(): return f"{base_compose} -f docker-compose.rocm.yml"
+    return f"{base_compose} -f docker-compose.cuda.yml"
+
+def wait_for_spine_healthy(timeout=600):
+    """Wait for the Spine to report healthy, falling back to Gate health check."""
+    start = time.time()
+    while time.time() - start < timeout:
+        try:
+            resp = urllib.request.urlopen('http://localhost:4001/health')
+            data = json.loads(resp.read())
+            if data.get('status') in ('healthy', 'degraded'):
+                return True
+        except:
+            pass
+        time.sleep(5)
+    # Fallback to Gate health check if Spine is unreachable
+    compose_args = get_compose_args()
+    start_wait = time.time()
+    while time.time() - start_wait < 60:
+        res = subprocess.run("docker inspect --format='{{.State.Health.Status}}' talos_gate", shell=True, capture_output=True, text=True)
+        status = res.stdout.strip() if res.stdout else "unknown"
+        if status == "healthy": return True
+        if status == "unhealthy":
+            subprocess.run(f"docker compose {compose_args} restart gate", shell=True, cwd=RUNTIME_DIR)
+        time.sleep(10)
+    return False
+
+def spine_restart(reason="Crash detected"):
+    """Request a Cortex restart via the Spine Control Plane, falling back to Docker."""
+    try:
+        req = urllib.request.Request(
+            'http://localhost:4001/command',
+            data=json.dumps({"command": "force_restart"}).encode(),
+            headers={"Content-Type": "application/json"},
+        )
+        urllib.request.urlopen(req)
+        return
+    except Exception as e:
+        print(f"[DAEMON] Error requesting restart via Spine: {e}")
+    # Fallback to Docker restart
+    compose_args = get_compose_args()
+    subprocess.run(f"docker compose {compose_args} restart talos", shell=True, cwd=RUNTIME_DIR)
+
+def check_cognitive_heartbeat(session_start_time: float) -> bool:
+    log_files = list(MEMORY_DIR.glob("task_log_*.jsonl"))
+    if not log_files: return True
+    latest_log = max(log_files, key=os.path.getmtime)
+    mtime = os.path.getmtime(latest_log)
+    if mtime < session_start_time:
+        return (time.time() - session_start_time) < 600
+    return (time.time() - mtime) < MAX_COGNITIVE_STALL_SECONDS
+
+daemon_process = None
+
+def cleanup(signum, frame):
+    global daemon_process
+    if daemon_process: daemon_process.terminate()
+    subprocess.run(f"docker compose {get_compose_args()} down", shell=True, cwd=RUNTIME_DIR)
+    if PID_FILE.exists(): PID_FILE.unlink()
+    sys.exit(0)
+
+def run_daemon():
+    signal.signal(signal.SIGINT, cleanup)
+    signal.signal(signal.SIGTERM, cleanup)
+    compose_args = get_compose_args()
+    subprocess.run(f"docker compose {compose_args} up -d spine llamacpp", shell=True, cwd=RUNTIME_DIR)
+
+    while True:
+        if not wait_for_spine_healthy():
+            time.sleep(30); continue
+
+        start_time = time.time()
+        print(f"\n[DAEMON] Starting Talos Agent...", flush=True)
+
+        cmd = f"docker compose {compose_args} up --build talos"
+        process = subprocess.Popen(cmd, shell=True, cwd=RUNTIME_DIR)
+        global daemon_process
+        daemon_process = process
+
+        exit_code = None
+        while exit_code is None:
+            exit_code = process.poll()
+            if exit_code is not None: break
+            if (time.time() - start_time) > UPTIME_STABILITY_THRESHOLD:
+                if not check_cognitive_heartbeat(start_time):
+                    spine_restart("Cognitive Stall")
+                    trigger_lazarus_reset("Cognitive Stall")
+                    break
+            time.sleep(30)
+
+        if exit_code is not None and exit_code != 0:
+            trigger_lazarus_reset(f"Fatal Exit (Code {exit_code})")
+
+        time.sleep(5)
+
+def start():
+    ensure_run_dir()
+    if PID_FILE.exists():
+        pid = int(PID_FILE.read_text())
+        try:
+            os.kill(pid, 0)
+            print(f"Watchdog already running (PID: {pid}).")
+            return
+        except: PID_FILE.unlink()
+
+    log_f = open(LOG_FILE, "a", encoding="utf-8")
+    proc = subprocess.Popen([sys.executable, "-u", __file__, "daemon"], stdout=log_f, stderr=subprocess.STDOUT, cwd=str(RUNTIME_DIR), start_new_session=True)
+    PID_FILE.write_text(str(proc.pid))
+    print(f"Watchdog started (PID: {proc.pid}).")
+
+def stop():
+    if not PID_FILE.exists():
+        subprocess.run(f"docker compose {get_compose_args()} down", shell=True, cwd=str(RUNTIME_DIR))
+        return
+    pid = int(PID_FILE.read_text())
+    os.kill(pid, signal.SIGTERM)
+    time.sleep(5)
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument("command", choices=["start", "stop", "daemon"])
+    args = parser.parse_args()
+    if args.command == "start": start()
+    elif args.command == "stop": stop()
+    elif args.command == "daemon": run_daemon()
