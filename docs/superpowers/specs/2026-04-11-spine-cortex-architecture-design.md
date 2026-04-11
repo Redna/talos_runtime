@@ -142,14 +142,19 @@ Communication via Unix domain socket with JSON-RPC-like protocol.
 
 | Method | Purpose | Parameters |
 |--------|---------|------------|
-| `think` | Call the LLM with current stream and tool definitions | `{focus: string, tools: [{name, description, parameters}]}` — tools use standard OpenAI JSON Schema format |
+| `think` | Call the LLM with current stream and tool definitions | `{focus: string, tools: [{name, description, parameters}], hud_data: {memory_keys: int, last_keys: [string], urgency: string}}` — tools use standard OpenAI JSON Schema format. `hud_data` is the Cortex's contribution to the HUD piggyback. |
 | `tool_result` | Return tool execution result | `{tool_call_id: string, output: string, success: bool}` |
 | `request_fold` | Request a context fold | `{synthesis: string}` |
 | `request_restart` | Request a clean restart | `{reason: string}` |
+| `send_message` | Send a message to the creator via Spine-owned channels | `{channel: string, text: string}` — currently supports "telegram". The Spine routes through its adapter. |
 | `emit_event` | Log a custom event | `{type: string, payload: object}` |
 | `get_state` | Query the Spine's view of agent state | `{keys: [string]}` — returns authoritative values for context_pct, turn, tokens_consumed, fold_pending, etc. |
 
 **Note on `think` and tools:** The Cortex includes its current tool definitions (in standard OpenAI JSON Schema format) with every `think()` call. The Spine validates them on-the-fly — no separate registration step. If a tool schema is invalid, the Spine rejects that specific tool and logs a warning, but continues with the valid ones. This is aligned with P5 (Minimalism) and P3 (LLM-First) — no extra registration protocol, just the standard OpenAI convention.
+
+**Note on `think` and HUD data:** The Cortex provides its state (focus, memory keys, urgency) via `hud_data` with each `think()` call. The Spine combines this with its own metrics (context %, turn count, tokens consumed) and any queued system notices to construct the full HUD piggyback on the last tool output. No callbacks, no subscriptions — the HUD data flows with the natural `think()` cycle. The Cortex can evolve its `hud_data` format freely; the Spine ignores fields it doesn't understand.
+
+**Note on `send_message`:** The Spine owns the Telegram bot token and routes messages through its adapter. The Cortex calls `send_message("telegram", text)` to communicate with the creator. For other channels (Discord, Slack, etc.), the Cortex writes its own Python tools that call those APIs directly.
 
 **Note on `get_state`:** The Spine maintains an authoritative view of agent state (context window usage, turn count, total tokens, whether a fold is pending, etc.). The Cortex can query this to get accurate values that may differ from its own stale context after a fold or restart.
 
@@ -162,6 +167,39 @@ Communication via Unix domain socket with JSON-RPC-like protocol.
 | `tool_timeout` | A tool exceeded its time limit | After configurable timeout |
 | `pause` | Stop the Cortex loop | Operator command |
 | `resume` | Resume the Cortex loop | Operator command |
+
+### 5.4 HUD and Messaging Flow
+
+The HUD (Heads-Up Display) provides the agent with situational awareness without polluting the stream. It is piggybacked onto the last tool output, never injected as a separate message.
+
+**HUD construction (on every `think()` call):**
+
+1. The Cortex provides `hud_data` with its state: `{focus, memory_keys, last_keys, urgency}`
+2. The Spine adds its own metrics: `{context_pct, turn, tokens_consumed}`
+3. The Spine appends any queued system notices (Telegram messages, crash recovery, forced folds)
+4. The Spine formats the combined HUD string and appends it to the last tool output
+
+**Format:**
+```
+[HUD | Context: 62% | Turn: 43 | Memory: 42 keys | Last 3: database_schema, auth_flow, bug_report | Focus: fix_auth_bug]
+[SYSTEM | Message from creator: "stop current task" | Urgency: elevated]
+```
+
+**Incoming Telegram messages:**
+
+1. Creator sends a message via Telegram
+2. Spine's Telegram adapter receives it and queues it as a system_notice
+3. On the next `think()` call, the Spine injects the queued notice into the HUD piggyback
+4. The agent sees the message at the start of its next thinking cycle — no interruption, no new turn
+
+**Outgoing messages (Cortex → Creator):**
+
+1. The Cortex decides to send a message
+2. The Cortex calls `spine.send_message("telegram", "Hello creator")`
+3. The Spine routes it through its Telegram adapter
+4. For other channels (Discord, Slack, etc.), the Cortex writes its own Python tools that call those APIs directly — no Spine involvement needed
+
+**Why no callbacks or subscriptions:** The HUD data flows with the natural `think()` cycle. The Cortex provides its state, the Spine adds its metrics and queued notices. Both sides contribute their data on every turn. No event bus, no callback registration, no pub/sub system.
 
 ---
 
