@@ -7,7 +7,12 @@ Prerequisites:
 - Test uses a mock Gate server
 """
 import json
+import os
 import socket
+import sys
+
+# Add cortex directory to Python path for imports
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', 'cortex'))
 import subprocess
 import time
 import tempfile
