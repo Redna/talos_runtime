@@ -15,14 +15,19 @@ services:
       - UV_CACHE_DIR=/tmp/.uv-cache
       - DEFAULT_MODEL=${DEFAULT_MODEL}
       - TALOS_MODEL=${TALOS_MODEL}
+      - SPINE_SOCKET=/tmp/spine.sock
     volumes:
       - ../talos_memory:/memory
+      - spine_observability:/spine:ro
+      - /tmp/talos_spine.sock:/tmp/spine.sock
       - talos_workspace:/app
     networks:
       - talos_net
     depends_on:
       gate:
         condition: service_healthy
+      spine:
+        condition: service_started
 
   gate:
     build:
