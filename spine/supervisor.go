@@ -29,3 +29,7 @@ func (s *Supervisor) Run() {
 func (s *Supervisor) Stop() {
 	close(s.stopCh)
 }
+
+func (s *Supervisor) RequestRestart(reason string) {
+	// Will be implemented in Task 5
+}

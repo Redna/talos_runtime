@@ -16,3 +16,7 @@ func (t *TelegramBot) Start() error {
 	// Will be implemented in Task 6
 	return nil
 }
+
+func SendTelegramMessage(cfg *Config, text string) {
+	// Will be implemented in Task 6
+}
