@@ -137,21 +137,23 @@ The HUD is not injected as a separate turn — it is appended to the last tool o
 
 **Format:**
 ```
-[HUD | Context: X% | Turn: Y | Time: Z | Memory: N keys | Focus: objective | Urgency: LEVEL] [SYSTEM: Event Description]
+[HUD | Context: X% | Turn: Y | Time: Z | Memory: N keys | Focus: objective] [SYSTEM: Event Description | Urgency: LEVEL]
 ```
+
+Urgency applies to system events, not the HUD status line. It qualifies *why* the piggyback was injected — not the agent's general state.
 
 **Urgency Levels:**
 
-| Level | Meaning | Trigger |
+| Level | Meaning | Example |
 |-------|---------|---------|
-| `nominal` | Normal operation | Default state |
-| `elevated` | Attention needed | Context > 50%, approaching budget limits, non-critical warnings |
-| `critical` | Immediate action required | Context > 75%, budget exhausted, `[FORCE FOLD]`, crash recovery |
+| `nominal` | Informational | Context threshold at 50%, memory key count update |
+| `elevated` | Attention needed | Context > 75%, approaching budget limit |
+| `critical` | Immediate action required | Creator message: "stop current task", budget exhausted, `[FORCE FOLD]` |
 
 **Triggers:**
 - Context threshold breaches (50%, 75%, etc.)
 - System warnings (`[RECOMMEND FOLD]`, `[FORCE FOLD]`)
-- External messages from creator
+- External messages from creator (always carry their own urgency)
 - Processing errors
 - Memory state changes (new keys, focus shifts)
 - Budget threshold breaches
@@ -175,7 +177,7 @@ The Core Engine tracks exactly one string: `current_focus`.
 
 The HUD displays memory state as part of the unified piggyback HUD, not the system prompt:
 ```
-[HUD | Context: X% | Turn: Y | Memory: 42 keys | Last 3: database_schema, telegram_flow, ast_rules | Focus: fix_auth_bug | Urgency: elevated]
+[HUD | Context: X% | Turn: Y | Memory: 42 keys | Last 3: database_schema, telegram_flow, ast_rules | Focus: fix_auth_bug]
 ```
 
 The KV store contents are never injected into the system prompt. Memory details are retrieved on-demand via capabilities when needed.
@@ -307,7 +309,7 @@ graph TB
 | Host Path | Container Mount | Purpose |
 |-----------|-----------------|---------|
 | `../talos_memory` | `/memory` | Agent state, KV store, task queue, crash logs |
-| `talos_workspace` | `/app` | Agent source code (named Docker volume) |
+| `talos_workspace` | `/app` | Agent source code (named Docker volume, isolated from host repo) |
 | `./llm_logs` | `/runtime_logs` | LLM call traces and audit logs |
 | `./models` | `/models` | `.gguf` model files for local inference |
 
