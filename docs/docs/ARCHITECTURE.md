@@ -21,6 +21,8 @@ graph TB
         LLAMACPP["llama.cpp<br/>(Inference)"]
     end
     ENV["talos_memory/<br/>talos_workspace/"]
+    TOGETHER["Together AI<br/>(Cloud)"]
+    OLLAMA["Ollama<br/>(Cloud)"]
 
     WD -->|"start/stop<br/>Lazarus reset"| N
     N -->|"String Events"| E1
@@ -32,7 +34,9 @@ graph TB
     E3 -->|"String Responses"| N
     E4 -->|"String Responses"| N
     N -->|"LLM requests"| GATE
-    GATE -->|"route"| LLAMACPP
+    GATE -->|"local route"| LLAMACPP
+    GATE -->|"cloud route"| TOGETHER
+    GATE -->|"cloud route"| OLLAMA
     E2 -->|"Read/Write"| ENV
     E3 -->|"KV Store"| ENV
     E4 -->|"Execute"| ENV
@@ -120,13 +124,12 @@ At turn N, the stream looks like this:
 
 ```
 Turn N-6 (archived) →
-  ├─ [REASONING: stripped]
-  ├─ [TOOL PARAMETERS: stripped]  ← e.g., entire write_file content
-  ├─ [TOOL OUTPUT: truncated → "... 500 lines archived ..."]
-  └─ [RETAINED: turn label + task outcome summary only]
+  ├─ [ASSISTANT MESSAGE: retained in full]  ← never shed
+  ├─ [TOOL PARAMETERS: stripped]             ← e.g., entire write_file content
+  └─ [TOOL OUTPUT: truncated → "... 500 lines archived ..."]
 ```
 
-This preserves a lightweight trace for auditability while freeing token budget.
+Assistant messages (reasoning, decisions) are never shed — they represent the agent's cognitive trace. Only tool parameters and outputs are stripped, as they can be large but are recoverable from the environment.
 
 ### 3.3 The Piggyback HUD
 
@@ -134,14 +137,24 @@ The HUD is not injected as a separate turn — it is appended to the last tool o
 
 **Format:**
 ```
-[Context: X% | Turn: Y | Time: Z] [SYSTEM: Event Description]
+[HUD | Context: X% | Turn: Y | Time: Z | Memory: N keys | Focus: objective | Urgency: LEVEL] [SYSTEM: Event Description]
 ```
+
+**Urgency Levels:**
+
+| Level | Meaning | Trigger |
+|-------|---------|---------|
+| `nominal` | Normal operation | Default state |
+| `elevated` | Attention needed | Context > 50%, approaching budget limits, non-critical warnings |
+| `critical` | Immediate action required | Context > 75%, budget exhausted, `[FORCE FOLD]`, crash recovery |
 
 **Triggers:**
 - Context threshold breaches (50%, 75%, etc.)
 - System warnings (`[RECOMMEND FOLD]`, `[FORCE FOLD]`)
 - External messages from creator
 - Processing errors
+- Memory state changes (new keys, focus shifts)
+- Budget threshold breaches
 
 The HUD is appended only when one of these events occurs, keeping the stream clean during normal operation.
 
@@ -160,9 +173,9 @@ The Core Engine tracks exactly one string: `current_focus`.
 
 ### 4.2 The HUD Memory Summary
 
-The HUD displays a memory summary as part of its status line, not the system prompt:
+The HUD displays memory state as part of the unified piggyback HUD, not the system prompt:
 ```
-[HUD | Context: X% | Turn: Y | Queue: Z | Memory: 42 keys | Last 3: database_schema, telegram_flow, ast_rules]
+[HUD | Context: X% | Turn: Y | Memory: 42 keys | Last 3: database_schema, telegram_flow, ast_rules | Focus: fix_auth_bug | Urgency: elevated]
 ```
 
 The KV store contents are never injected into the system prompt. Memory details are retrieved on-demand via capabilities when needed.
@@ -186,7 +199,8 @@ Capabilities are pure functions. They receive string arguments, affect the exter
 
 | Capability | Function |
 |------------|----------|
-| `generate_symbol_map(path: str)` | Scans codebase via AST parser (Tree-sitter), returns structural skeleton (File → Class → Function) |
+| `generate_repo_map()` | Scans entire repository, returns index of all symbols and their locations (File → Symbol → Line) |
+| `generate_symbol_map(path: str)` | Scans single file via AST parser (Tree-sitter), returns structural skeleton (File → Class → Function) |
 | `replace_symbol(path: str, symbol_name: str, new_code: str)` | Locates target class/function in AST and replaces it |
 | `write_file(path: str, content: str)` | Atomic file creation or overwrite |
 | `read_file(path: str, start_line: int, end_line: int)` | Progressive file reading for bounded content access |
@@ -204,9 +218,9 @@ Capabilities are pure functions. They receive string arguments, affect the exter
 
 | Capability | Function |
 |------------|----------|
-| `bash_command(command: str)` | Git operations, environment exploration, script execution |
+| `bash_command(command: str)` | Git operations, environment exploration, script execution. Rejects `--no-verify` and equivalent flags that bypass git hooks |
 | `send_message(text: str)` | Communication with creator (e.g., Telegram, CLI) |
-| `restart()` | Graceful termination to apply source modifications |
+| `restart()` | Graceful termination to apply source modifications. Rejected if uncommitted changes exist |
 
 ### 5.5 Capability Communication Pattern
 
@@ -246,7 +260,9 @@ graph LR
 3. **Constitutional Auditor:** A zero-temperature LLM acts as judge. It receives the git diff and the full constitutional text, then evaluates whether the proposed change conflicts with any core principle. The agent cannot commit until the auditor returns a clean verdict.
 4. **Graceful Restart:** After commit with clean git status, agent calls `restart` to reload with updated source
 
-**Constraint:** The `restart` capability rejects execution if there are unstaged or uncommitted changes in the repository.
+**Constraints:**
+- The `restart` capability rejects execution if there are unstaged or uncommitted changes in the repository. All modifications must be committed before a restart is permitted.
+- The `bash_command` capability rejects any command containing `--no-verify` (or equivalent flags like `--no-gpg-sign`) that would bypass git pre-commit hooks. This is enforced at the capability level, not as a convention.
 
 ---
 
@@ -272,7 +288,8 @@ graph TB
     TALOS -->|"/memory"| MEM
     TALOS -->|"/app"| WS
     GATE -->|"local route"| LLAMACPP
-    GATE -->|"remote route"| TOGETHER["Together AI"]
+    GATE -->|"cloud route"| TOGETHER["Together AI"]
+    GATE -->|"cloud route"| OLLAMA["Ollama"]
     GATE -->|"audit logs"| LOGS
     LLAMACPP -->|".gguf models"| MODELS
 ```
@@ -347,7 +364,7 @@ When the agent crashes or stalls, the watchdog initiates a recovery sequence:
 
 1. **Capture crash log** — `docker compose logs --tail=100 talos` → `/memory/last_crash.log`
 2. **Reset by depth** — `git reset --hard HEAD~N` on both the named volume and host repo
-3. **Queue system notice** — Inform the next incarnation about the crash and revert depth
+3. **Queue system notice** — A piggyback HUD message is injected into the next agent incarnation's first tool output, informing it about the crash, the revert depth, and any relevant context. This ensures the agent is immediately aware of its recovery state.
 4. **Escalation** — After 5 consecutive failures on the same task, inject a `[SYSTEM OVERRIDE]` forcing the agent to abandon the approach
 
 The reset depth increases with each consecutive failure on the same task (1, 2, 3, 4, 5), capped at `MAX_REVERSAL_DEPTH = 5`.
@@ -367,10 +384,11 @@ Talos Gate is a FastAPI proxy that sits between the agent and all LLM backends. 
 ```
 Agent → POST /v1/chat/completions → Gate → Route decision
                                           ├─ .gguf model → llama.cpp (local, free)
-                                          └─ together_ai/ prefix → Together AI (paid)
+                                          ├─ together_ai/ prefix → Together AI (cloud, paid)
+                                          └─ ollama/ prefix → Ollama (cloud)
 ```
 
-The `MODEL_MAP` dictionary maps `.gguf` filenames to `local`, and any model name containing `together` routes to the remote API. Unknown models default to local.
+The `MODEL_MAP` dictionary maps `.gguf` filenames to `local`, model names containing `together` to Together AI, and model names containing `ollama` to the Ollama backend. Unknown models default to local.
 
 ### Budget Enforcement
 
