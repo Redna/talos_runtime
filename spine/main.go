@@ -1,7 +1,6 @@
 package main
 
 import (
-	"fmt"
 	"log"
 	"os"
 	"os/signal"
@@ -76,5 +75,5 @@ func main() {
 	supervisor.Stop()
 	controlPlane.Stop()
 	ipcServer.Stop()
-	fmt.Println("[Spine] Stopped.")
+	log.Println("[Spine] Stopped.")
 }
