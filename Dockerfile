@@ -29,12 +29,12 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
 RUN curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR="/usr/local/bin" sh
 
 # 1. Cache dependencies (Layer is cached unless pyproject.toml/uv.lock changes)
-COPY talos/pyproject.toml talos/uv.lock ./
+COPY talos_runtime/talos/pyproject.toml talos_runtime/talos/uv.lock ./
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --frozen --no-install-project --no-dev --no-progress
 
 # 2. Copy the actual code
-COPY talos/ .
+COPY talos_runtime/talos/ .
 
 # 3. Final sync to install the local project (fast as deps are cached)
 RUN --mount=type=cache,target=/root/.cache/uv \
@@ -50,7 +50,7 @@ COPY talos_runtime/entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/entrypoint.sh
 
 # 7. Copy Spine configuration
-COPY spine_config.json /spine/spine_config.json
+COPY talos_runtime/spine_config.json /spine/spine_config.json
 
 # The entrypoint launches the seed agent directly
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
