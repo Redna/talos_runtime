@@ -1,27 +1,5 @@
 services:
   llamacpp:
-    image: ghcr.io/ggml-org/llama.cpp:server-rocm
-    container_name: llamacpp
-    restart: unless-stopped
-    privileged: true
-    shm_size: 16G
-    devices:
-      - /dev/kfd:/dev/kfd
-      - /dev/dri:/dev/dri
-    group_add:
-      - video
-      - render
-    cap_add:
-      - SYS_PTRACE
-    security_opt:
-      - seccomp=unconfined
-    ipc: host
-    volumes:
-      - ./models:/models
-    ports:
-      - "8000:8080"
-    environment:
-      - HSA_ENABLE_SDMA=0
     command:
       - -m
       - /models/gemma-4-26B-A4B-it-UD-Q4_K_XL.gguf
@@ -62,9 +40,3 @@ services:
       timeout: 5s
       retries: 5
       start_period: 300s
-    networks:
-      - talos_net
-
-networks:
-  talos_net:
-    driver: bridge

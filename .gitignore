@@ -1,6 +1,8 @@
 # Agent state (Cortex reads/writes)
 /memory/
 
+/models/
+
 # Spine observability (Cortex read-only)
 /spine/
 

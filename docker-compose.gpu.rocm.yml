@@ -1,0 +1,12 @@
+services:
+  llamacpp:
+    image: ghcr.io/ggml-org/llama.cpp:server-rocm
+    privileged: true
+    devices:
+      - /dev/kfd:/dev/kfd
+      - /dev/dri:/dev/dri
+    group_add:
+      - video
+      - render
+    environment:
+      - HSA_ENABLE_SDMA=0
