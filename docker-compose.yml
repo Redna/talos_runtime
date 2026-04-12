@@ -17,17 +17,14 @@ services:
       - TALOS_MODEL=${TALOS_MODEL}
       - SPINE_SOCKET=/tmp/spine.sock
     volumes:
-      - ../talos_memory:/memory
-      - spine_observability:/spine:ro
-      - /tmp/talos_spine.sock:/tmp/spine.sock
+      - ./memory:/memory
+      - spine_observability:/spine
       - talos_workspace:/app
     networks:
       - talos_net
     depends_on:
       gate:
         condition: service_healthy
-      spine:
-        condition: service_started
 
   gate:
     build:
@@ -37,7 +34,7 @@ services:
     ports:
       - "4000:4000"
     volumes:
-      - ../talos_memory:/memory:rw
+      - ./memory:/memory:rw
       - ./llm_logs:/runtime_logs:rw
     environment:
       - TOGETHERAI_API_KEY=${TOGETHERAI_API_KEY:-}
@@ -110,37 +107,6 @@ services:
       - "64"
       - --reasoning
       - "on"
-    networks:
-      - talos_net
-
-  spine:
-    build:
-      context: ./spine
-      dockerfile: Dockerfile
-    container_name: talos_spine
-    env_file: .env
-    environment:
-      - GATE_URL=http://gate:4000
-      - MEMORY_DIR=/memory
-      - SPINE_DIR=/spine
-      - APP_DIR=/app
-      - CONSTITUTION_PATH=/app/CONSTITUTION.md
-      - IDENTITY_PATH=/app/identity.md
-      - SOCKET_PATH=/tmp/spine.sock
-      - CONTROL_PLANE_PORT=4001
-      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN:-}
-      - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID:-0}
-    volumes:
-      - ../talos_memory:/memory
-      - spine_observability:/spine
-      - talos_workspace:/app:ro
-      - /tmp/talos_spine.sock:/tmp/spine.sock
-    ports:
-      - "4001:4001"
-    depends_on:
-      gate:
-        condition: service_healthy
-    restart: unless-stopped
     networks:
       - talos_net
 
