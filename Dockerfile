@@ -1,11 +1,3 @@
-# 6. Build the Spine (Go sidecar)
-FROM golang:1.22-alpine AS spine-builder
-WORKDIR /build
-COPY talos_runtime/spine/go.mod talos_runtime/spine/go.sum ./
-RUN go mod download
-COPY talos_runtime/spine/*.go ./
-RUN CGO_ENABLED=0 go build -o spine .
-
 # Use a lightweight Python base image
 FROM python:3.13-slim
 
@@ -57,12 +49,8 @@ RUN chown -R root:root /runtime_scripts && chmod -R 555 /runtime_scripts && \
 COPY talos_runtime/entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/entrypoint.sh
 
-# 7. Copy the Spine binary from the Go builder
-COPY --from=spine-builder /build/spine /usr/local/bin/spine
-RUN chmod +x /usr/local/bin/spine
-
-# 8. Copy Spine configuration
-COPY talos_runtime/spine/spine_config.json /spine/spine_config.json
+# 7. Copy Spine configuration
+COPY spine_config.json /spine/spine_config.json
 
 # The entrypoint launches the seed agent directly
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
