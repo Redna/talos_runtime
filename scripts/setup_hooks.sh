@@ -32,6 +32,8 @@ echo "[Pre-commit] Executing Sentinel Quality Gate..."
 python3 /runtime_scripts/constitutional_auditor.py || { echo "[Audit] FAIL: Constitution violation detected. Commit blocked."; exit 1; }
 
 echo "[Pre-commit] All gates passed. Memory committed."
+git rev-parse HEAD > /spine/last_candidate_commit
+echo "[Pre-commit] Candidate commit recorded."
 EOF
 
 chmod +x "$HOOK_FILE"

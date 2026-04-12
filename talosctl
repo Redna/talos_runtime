@@ -62,7 +62,15 @@ def get_current_task_id():
         except: pass
     return None
 
-def trigger_lazarus_reset(reason="Crash detected"):
+def check_spine_healthy():
+    try:
+        resp = urllib.request.urlopen('http://localhost:4001/health', timeout=5)
+        data = json.loads(resp.read())
+        return data.get('status') in ('healthy', 'degraded')
+    except Exception:
+        return False
+
+def trigger_lazarus_reset(reason="Crash detected", mode="cortex"):
     stats = load_runtime_stats()
     current_task = get_current_task_id()
 
@@ -76,6 +84,20 @@ def trigger_lazarus_reset(reason="Crash detected"):
     print(f"\033[91m[DAEMON] LAZARUS PROTOCOL: {reason.upper()}. Reverting {depth} commit(s)...\033[0m", flush=True)
 
     capture_crash_log()
+
+    if mode == "spine":
+        stable_path = Path("/spine/last_stable_commit")
+        if not stable_path.exists():
+            print("[DAEMON] No stable commit recorded, falling back to cortex mode.", flush=True)
+            mode = "cortex"
+        else:
+            stable_sha = stable_path.read_text().strip()
+            subprocess.run(f"git checkout {stable_sha} -- spine/", shell=True, cwd=AGENT_DIR)
+            subprocess.run("git add spine/", shell=True, cwd=AGENT_DIR)
+            subprocess.run('git commit -m "lazarus: revert spine to stable"', shell=True, cwd=AGENT_DIR)
+            queue_system_notice(f"[SYSTEM WATCHDOG]: Spine crash detected. Reverted spine/ to stable commit {stable_sha[:8]}.\nReason: {reason}")
+            save_runtime_stats(stats)
+            return
 
     # --- VOLUME RECOVERY ---
     print(f"[DAEMON] Reverting code in named volume 'talos_workspace'...")
@@ -225,7 +247,11 @@ def run_daemon():
             time.sleep(30)
 
         if exit_code is not None and exit_code != 0:
-            trigger_lazarus_reset(f"Fatal Exit (Code {exit_code})")
+            spine_healthy = check_spine_healthy()
+            if not spine_healthy:
+                trigger_lazarus_reset(reason="Spine crash", mode="spine")
+            else:
+                trigger_lazarus_reset(reason=f"Fatal Exit (Code {exit_code})", mode="cortex")
 
         time.sleep(5)
 
