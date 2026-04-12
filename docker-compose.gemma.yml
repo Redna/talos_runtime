@@ -1,0 +1,70 @@
+services:
+  llamacpp:
+    image: ghcr.io/ggml-org/llama.cpp:server-rocm
+    container_name: llamacpp
+    restart: unless-stopped
+    privileged: true
+    shm_size: 16G
+    devices:
+      - /dev/kfd:/dev/kfd
+      - /dev/dri:/dev/dri
+    group_add:
+      - video
+      - render
+    cap_add:
+      - SYS_PTRACE
+    security_opt:
+      - seccomp=unconfined
+    ipc: host
+    volumes:
+      - ./models:/models
+    ports:
+      - "8000:8080"
+    environment:
+      - HSA_ENABLE_SDMA=0
+    command:
+      - -m
+      - /models/gemma-4-26B-A4B-it-UD-Q4_K_XL.gguf
+      - --mmproj
+      - /models/mmproj-BF16.gguf
+      - --host
+      - "0.0.0.0"
+      - --port
+      - "8080"
+      - -ngl
+      - "999"
+      - -c
+      - "40960"
+      - --no-warmup
+      - --flash-attn
+      - "on"
+      - --cache-type-k
+      - "q8_0"
+      - --cache-type-v
+      - "q8_0"
+      - -b
+      - "4096"
+      - -ub
+      - "2048"
+      - -np
+      - "1"
+      - --temp
+      - "1.0"
+      - --top-p
+      - "0.95"
+      - --top-k
+      - "64"
+      - --chat-template-kwargs
+      - '{"enable_thinking":true}'
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8080/health || exit 1"]
+      interval: 60s
+      timeout: 5s
+      retries: 5
+      start_period: 300s
+    networks:
+      - talos_net
+
+networks:
+  talos_net:
+    driver: bridge
