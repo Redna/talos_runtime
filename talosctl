@@ -15,7 +15,7 @@ from pathlib import Path
 RUNTIME_DIR = Path(__file__).parent.resolve()
 ROOT = RUNTIME_DIR.parent
 AGENT_DIR = ROOT / "talos"
-MEMORY_DIR = ROOT / "talos_memory"
+MEMORY_DIR = RUNTIME_DIR / "memory"
 RUN_DIR = Path("/tmp/talos-runtime")
 PID_FILE = RUN_DIR / "watchdog.pid"
 LOG_FILE = RUN_DIR / "watchdog.log"
@@ -221,7 +221,7 @@ def run_daemon():
     signal.signal(signal.SIGINT, cleanup)
     signal.signal(signal.SIGTERM, cleanup)
     compose_args = get_compose_args()
-    subprocess.run(f"docker compose {compose_args} up -d spine llamacpp", shell=True, cwd=RUNTIME_DIR)
+    subprocess.run(f"docker compose {compose_args} up -d llamacpp", shell=True, cwd=RUNTIME_DIR)
 
     while True:
         if not wait_for_spine_healthy():
