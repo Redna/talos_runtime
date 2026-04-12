@@ -38,7 +38,7 @@ echo "Containment established."
 
 # Start the Spine in the background
 echo "Starting Spine..."
-/usr/local/bin/spine /spine/spine_config.json &
+python -m spine /spine/spine_config.json &
 SPINE_PID=$!
 
 # Wait for Spine socket to be available
@@ -55,6 +55,9 @@ if [ ! -S /tmp/spine.sock ]; then
   echo "ERROR: Spine socket not available after 30 seconds"
   exit 1
 fi
+
+echo "[Entrypoint] Recording candidate commit"
+git -C /app rev-parse HEAD > /spine/last_candidate_commit
 
 echo "Awaking Talos as $USER_NAME ($USER_ID:$GROUP_ID)..."
 exec gosu "$USER_NAME" "$@"
