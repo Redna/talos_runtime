@@ -22,3 +22,20 @@ async def test_subscriber_receives_event():
     assert event["type"] == "token"
     assert event["content"] == "hello"
     _xray_subscribers.clear()
+
+
+def test_xray_history_list():
+    from starlette.testclient import TestClient
+
+    client = TestClient(app)
+    response = client.get("/v1/xray/history?count=5")
+    assert response.status_code == 200
+    assert isinstance(response.json(), list)
+
+
+def test_xray_history_detail_not_found():
+    from starlette.testclient import TestClient
+
+    client = TestClient(app)
+    response = client.get("/v1/xray/history/nonexistent.json")
+    assert response.status_code == 404

@@ -250,14 +250,66 @@ async def chat_completions(request: Request, background_tasks: BackgroundTasks):
     if is_streaming:
 
         async def stream_proxy() -> AsyncGenerator[bytes, None]:
+            _xray_broadcast({"type": "think_start", "model": model, "ts": time.time()})
             try:
                 async with httpx.AsyncClient(timeout=1800.0) as client:
                     async with client.stream(
                         "POST", url, json=body, headers=headers
                     ) as resp:
                         resp.raise_for_status()
-                        async for chunk in resp.aiter_bytes():
-                            yield chunk
+                        async for line in resp.aiter_lines():
+                            if not line.startswith("data: "):
+                                yield line.encode("utf-8") + b"\n\n"
+                                continue
+                            payload = line[6:]
+                            if payload.strip() == "[DONE]":
+                                yield b"data: [DONE]\n\n"
+                                break
+                            try:
+                                chunk_data = json.loads(payload)
+                                delta = chunk_data.get("choices", [{}])[0].get(
+                                    "delta", {}
+                                )
+                                content = delta.get("content", "")
+                                tool_calls = delta.get("tool_calls")
+                                if content:
+                                    _xray_broadcast(
+                                        {
+                                            "type": "token",
+                                            "content": content,
+                                            "model": model,
+                                            "ts": time.time(),
+                                        }
+                                    )
+                                if tool_calls:
+                                    for tc in tool_calls:
+                                        if tc.get("function", {}).get("name"):
+                                            _xray_broadcast(
+                                                {
+                                                    "type": "tool_call",
+                                                    "id": tc.get("id", ""),
+                                                    "name": tc["function"]["name"],
+                                                    "arguments": tc["function"].get(
+                                                        "arguments", "{}"
+                                                    ),
+                                                    "model": model,
+                                                    "ts": time.time(),
+                                                }
+                                            )
+                            except json.JSONDecodeError:
+                                pass
+                            yield f"data: {payload}\n\n".encode("utf-8")
+                _xray_broadcast(
+                    {
+                        "type": "think_end",
+                        "tokens_in": 0,
+                        "tokens_out": 0,
+                        "context_pct": 0.0,
+                        "model": model,
+                        "backend": backend_key,
+                        "ts": time.time(),
+                    }
+                )
                 background_tasks.add_task(
                     log_completion,
                     body,
@@ -270,6 +322,14 @@ async def chat_completions(request: Request, background_tasks: BackgroundTasks):
                 httpx.TimeoutException,
                 httpx.HTTPStatusError,
             ) as e:
+                _xray_broadcast(
+                    {
+                        "type": "error",
+                        "message": str(e),
+                        "model": model,
+                        "ts": time.time(),
+                    }
+                )
                 error_payload = {
                     "error": {
                         "message": f"Gateway Error: Model '{model}' is currently unreachable or offline. Please check available models or fallback to the local engine. Details: {str(e)}",
@@ -288,6 +348,21 @@ async def chat_completions(request: Request, background_tasks: BackgroundTasks):
                 resp.raise_for_status()
 
                 resp_json = resp.json()
+                _xray_broadcast(
+                    {
+                        "type": "think_end",
+                        "tokens_in": resp_json.get("usage", {}).get("prompt_tokens", 0),
+                        "tokens_out": resp_json.get("usage", {}).get(
+                            "completion_tokens", 0
+                        ),
+                        "context_pct": resp_json.get("usage", {}).get(
+                            "context_pct", 0.0
+                        ),
+                        "model": model,
+                        "backend": backend_key,
+                        "ts": time.time(),
+                    }
+                )
                 background_tasks.add_task(log_completion, body, resp_json, backend_key)
                 return resp_json
         except (httpx.ConnectError, httpx.TimeoutException, httpx.HTTPStatusError) as e:
@@ -567,6 +642,99 @@ async def health():
         "ollama_ready": ollama_ok,
         "current_spend": f"{get_current_spend():.4f}/{DAILY_BUDGET_LIMIT:.4f}",
     }
+
+
+@app.get("/v1/xray/stream")
+async def xray_stream(request: Request):
+    from sse_starlette.sse import EventSourceResponse
+
+    q = asyncio.Queue()
+    _xray_subscribers.append(q)
+
+    async def event_generator():
+        try:
+            while True:
+                try:
+                    event = await asyncio.wait_for(q.get(), timeout=15.0)
+                    yield {"event": "message", "data": json.dumps(event)}
+                except asyncio.TimeoutError:
+                    yield {"event": "ping", "data": ""}
+        finally:
+            if q in _xray_subscribers:
+                _xray_subscribers.remove(q)
+
+    return EventSourceResponse(event_generator())
+
+
+@app.get("/v1/xray/state")
+async def xray_state(request: Request):
+    from sse_starlette.sse import EventSourceResponse
+
+    async def event_generator():
+        while True:
+            yield {
+                "event": "message",
+                "data": json.dumps(
+                    {
+                        "type": "state",
+                        "spend": get_current_spend(),
+                        "budget_limit": DAILY_BUDGET_LIMIT,
+                    }
+                ),
+            }
+            await asyncio.sleep(10)
+
+    return EventSourceResponse(event_generator())
+
+
+@app.get("/v1/xray/events")
+async def xray_events(request: Request):
+    from sse_starlette.sse import EventSourceResponse
+
+    async def event_generator():
+        while True:
+            yield {"event": "ping", "data": ""}
+            await asyncio.sleep(15)
+
+    return EventSourceResponse(event_generator())
+
+
+@app.get("/v1/xray/history")
+async def xray_history_list(count: int = 50):
+    if not LOG_DIR.exists():
+        return []
+    files = sorted(LOG_DIR.glob("call-*.json"), reverse=True)[:count]
+    result = []
+    for f in files:
+        try:
+            data = json.loads(f.read_text())
+            result.append(
+                {
+                    "filename": f.name,
+                    "model": data.get("model", "unknown"),
+                    "timestamp": data.get("timestamp", ""),
+                    "tokens_in": data.get("response", {})
+                    .get("usage", {})
+                    .get("prompt_tokens", 0),
+                    "tokens_out": data.get("response", {})
+                    .get("usage", {})
+                    .get("completion_tokens", 0),
+                    "backend": data.get("backend", "unknown"),
+                }
+            )
+        except:
+            pass
+    return result
+
+
+@app.get("/v1/xray/history/{filename}")
+async def xray_history_detail(filename: str):
+    filepath = LOG_DIR / filename
+    if not filepath.exists():
+        raise HTTPException(status_code=404, detail="Not found")
+    if not str(filepath).startswith(str(LOG_DIR)):
+        raise HTTPException(status_code=403, detail="Forbidden")
+    return json.loads(filepath.read_text())
 
 
 @app.post("/v1/audit")
