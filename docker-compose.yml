@@ -50,14 +50,12 @@ services:
       timeout: 5s
       retries: 20
       start_period: 10s
-    restart: unless-stopped
     networks:
       - talos_net
 
   llamacpp:
     image: ${LLAMACPP_IMAGE:-ghcr.io/ggml-org/llama.cpp:server-rocm}
     container_name: llamacpp
-    restart: unless-stopped
     shm_size: 16G
     cap_add:
       - SYS_PTRACE
