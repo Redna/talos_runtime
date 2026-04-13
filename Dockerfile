@@ -6,7 +6,7 @@ ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     TALOS_DRIVE_ROOT=/drive \
     TALOS_REPO_DIR=/app \
-    # Store venv OUTSIDE of /app so it isn't overwritten by the docker-compose bind mount
+    PYTHONPATH=/app:/app/cortex \
     UV_PROJECT_ENVIRONMENT=/venv \
     PATH="/venv/bin:$PATH"
 
@@ -63,4 +63,4 @@ COPY talos_runtime/spine_config.json /spine/spine_config.json
 # The entrypoint launches the seed agent directly
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
 # Use absolute path to the persistent venv python
-CMD ["/venv/bin/python", "seed_agent.py"]
+CMD ["/venv/bin/python", "cortex/seed_agent.py"]

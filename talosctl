@@ -210,28 +210,29 @@ def get_compose_args(cached=False):
     _compose_args_cache = result
     return result
 
-def wait_for_spine_healthy(timeout=600):
-    """Wait for the Spine to report healthy, falling back to Gate health check."""
+def wait_for_gate_healthy(timeout=120):
+    """Wait for the Gate container to become healthy via Docker health check."""
+    start = time.time()
+    while time.time() - start < timeout:
+        res = subprocess.run("docker inspect --format='{{.State.Health.Status}}' talos_gate", shell=True, capture_output=True, text=True)
+        status = res.stdout.strip() if res.stdout else ""
+        if status == "healthy":
+            return True
+        time.sleep(3)
+    return False
+
+def wait_for_spine_healthy(timeout=300):
+    """Wait for the Spine to report healthy at port 4001."""
     start = time.time()
     while time.time() - start < timeout:
         try:
-            resp = urllib.request.urlopen('http://localhost:4001/health')
+            resp = urllib.request.urlopen('http://localhost:4001/health', timeout=5)
             data = json.loads(resp.read())
             if data.get('status') in ('healthy', 'degraded'):
                 return True
         except:
             pass
         time.sleep(5)
-    # Fallback to Gate health check if Spine is unreachable
-    compose_args = get_compose_args()
-    start_wait = time.time()
-    while time.time() - start_wait < 60:
-        res = subprocess.run("docker inspect --format='{{.State.Health.Status}}' talos_gate", shell=True, capture_output=True, text=True)
-        status = res.stdout.strip() if res.stdout else "unknown"
-        if status == "healthy": return True
-        if status == "unhealthy":
-            subprocess.run(f"docker compose {compose_args} restart gate", shell=True, cwd=RUNTIME_DIR)
-        time.sleep(10)
     return False
 
 def spine_restart(reason="Crash detected"):
@@ -311,7 +312,7 @@ def run_daemon():
 
     env = load_env(RUNTIME_DIR / ".env")
     model = env.get("DEFAULT_MODEL", "")
-    needs_llamacpp = model.endswith(".gguf") or not model
+    needs_llamacpp = model.endswith(".gguf")
 
     if needs_llamacpp:
         res = subprocess.run(f"docker compose {compose_args} up -d llamacpp", shell=True, cwd=RUNTIME_DIR, capture_output=True, text=True)
@@ -328,6 +329,15 @@ def run_daemon():
     else:
         print("[DAEMON] No .gguf model configured, skipping llamacpp.", flush=True)
 
+    print("[DAEMON] Starting Gate...", flush=True)
+    res = subprocess.run(f"docker compose {compose_args} up -d gate", shell=True, cwd=RUNTIME_DIR, capture_output=True, text=True)
+    if res.returncode != 0:
+        print(f"\033[91m[DAEMON] FATAL: docker compose up gate failed:\033[0m", flush=True)
+        print(res.stderr.strip(), flush=True)
+        HEALTH_FILE.write_text(json.dumps({"status": "failed", "error": "gate startup failed", "ts": time.time()}))
+        if PID_FILE.exists(): PID_FILE.unlink()
+        sys.exit(1)
+
     talos_model = env.get("TALOS_MODEL", "")
     if ":" in talos_model:
         if not check_ollama_healthy():
@@ -340,20 +350,13 @@ def run_daemon():
 
     healthy_retries = 0
     while True:
-        if not wait_for_spine_healthy():
+        if not wait_for_gate_healthy():
             healthy_retries += 1
             if healthy_retries >= MAX_INFRA_RETRIES:
-                res = subprocess.run(f"docker compose {compose_args} ps --format json", shell=True, cwd=RUNTIME_DIR, capture_output=True, text=True)
-                all_down = all(
-                    json.loads(line).get("State") != "running"
-                    for line in res.stdout.strip().splitlines()
-                    if line.strip()
-                ) if res.stdout.strip() else True
-                if all_down:
-                    print(f"\033[91m[DAEMON] FATAL: Infrastructure unreachable after {MAX_INFRA_RETRIES} attempts.\033[0m", flush=True)
-                    HEALTH_FILE.write_text(json.dumps({"status": "failed", "error": "infrastructure unreachable", "ts": time.time()}))
-                    if PID_FILE.exists(): PID_FILE.unlink()
-                    sys.exit(1)
+                print(f"\033[91m[DAEMON] FATAL: Gate unreachable after {MAX_INFRA_RETRIES} attempts.\033[0m", flush=True)
+                HEALTH_FILE.write_text(json.dumps({"status": "failed", "error": "gate unreachable", "ts": time.time()}))
+                if PID_FILE.exists(): PID_FILE.unlink()
+                sys.exit(1)
             HEALTH_FILE.write_text(json.dumps({"status": "running", "phase": "waiting_infra", "retries": healthy_retries, "ts": time.time()}))
             time.sleep(30); continue
         healthy_retries = 0

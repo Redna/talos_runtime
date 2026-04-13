@@ -523,6 +523,11 @@ async def check_environment():
     }
 
 
+@app.get("/healthz")
+async def healthz():
+    return {"status": "alive"}
+
+
 @app.get("/health")
 async def health():
     local_ok = False
@@ -543,7 +548,7 @@ async def health():
     if local_ok or ollama_ok:
         status = "healthy"
     else:
-        status = "unhealthy"
+        status = "degraded"
 
     return {
         "status": status,

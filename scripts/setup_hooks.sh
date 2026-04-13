@@ -6,7 +6,8 @@ if [ ! -f /.dockerenv ]; then
     exit 0
 fi
 
-HOOK_FILE=".git/hooks/pre-commit"
+HOOK_DIR=$(cd /app && git rev-parse --git-path hooks)
+HOOK_FILE="$HOOK_DIR/pre-commit"
 
 cat > "$HOOK_FILE" << 'EOF'
 #!/bin/bash

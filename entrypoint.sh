@@ -4,44 +4,46 @@ set -e
 USER_ID=${PUID:-1000}
 GROUP_ID=${PGID:-1000}
 
-# Create group and user if they do not exist
 if ! getent group "$GROUP_ID" >/dev/null; then groupadd -g "$GROUP_ID" talos; fi
 if ! getent passwd "$USER_ID" >/dev/null; then useradd -u "$USER_ID" -g "$GROUP_ID" -m -s /bin/bash talos; fi
 
 USER_NAME=$(getent passwd "$USER_ID" | cut -d: -f1)
 
-# Ensure the agent has write access to the workspace volume
-chown -R "$USER_NAME":"$GROUP_ID" /app
-
-# Basic Git Config for the user
 sudo -u "$USER_NAME" -H git config --global user.name "Talos"
 sudo -u "$USER_NAME" -H git config --global user.email "talos@agent.local"
 sudo -u "$USER_NAME" -H git config --global --add safe.directory /app
+sudo -u "$USER_NAME" -H git config --global --add safe.directory /runtime_git
+git config --global --add safe.directory /app
+git config --global --add safe.directory /runtime_git
 
-# Ensure Git hooks are active
+if [ -f /app/.git ] && grep -q "gitdir:" /app/.git; then
+    echo "[Entrypoint] Setting up git worktree for submodule..."
+    cp -a /runtime_git /tmp/runtime_git
+    sed -i "s|worktree = .*|worktree = /app|" /tmp/runtime_git/config
+    echo "gitdir: /tmp/runtime_git" > /app/.git
+fi
+
 if [ -f "/runtime_scripts/setup_hooks.sh" ]; then
     cd /app && /bin/bash /runtime_scripts/setup_hooks.sh
 fi
 
 echo "Locking down semantic firewall and git hooks..."
 
-# Transfer ownership of critical infrastructure to root
-# The agent will run as PUID (e.g., 1000) and will have read/execute access, but ZERO write access.
 chown -R root:root /runtime_scripts
-chown -R root:root /app/.git/hooks
-
-# Enforce strict permissions (755: Owner can rwx, others can only r-x)
+GIT_HOOKS_DIR="/app/.git/hooks"
+if [ -f /app/.git ]; then
+    GIT_HOOKS_DIR="/tmp/runtime_git/hooks"
+fi
+chown -R root:root "$GIT_HOOKS_DIR"
 chmod -R 755 /runtime_scripts
-chmod -R 755 /app/.git/hooks
+chmod -R 755 "$GIT_HOOKS_DIR"
 
 echo "Containment established."
 
-# Start the Spine in the background
 echo "Starting Spine..."
 python -m spine /spine/spine_config.json &
 SPINE_PID=$!
 
-# Wait for Spine socket to be available
 echo "Waiting for Spine socket..."
 for i in $(seq 1 30); do
   if [ -S /tmp/spine.sock ]; then
@@ -56,8 +58,12 @@ if [ ! -S /tmp/spine.sock ]; then
   exit 1
 fi
 
-echo "[Entrypoint] Recording candidate commit"
-git -C /app rev-parse HEAD > /spine/last_candidate_commit
+if git -C /app rev-parse HEAD > /dev/null 2>&1; then
+  git -C /app rev-parse HEAD > /spine/last_candidate_commit
+  echo "[Entrypoint] Recorded candidate commit"
+else
+  echo "[Entrypoint] WARNING: /app is not a git repository, skipping candidate commit"
+fi
 
 echo "Awaking Talos as $USER_NAME ($USER_ID:$GROUP_ID)..."
 exec gosu "$USER_NAME" "$@"

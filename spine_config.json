@@ -5,7 +5,7 @@
   "identity_path": "/app/identity.md",
   "app_dir": "/app",
   "cortex_bin": "/venv/bin/python",
-  "cortex_args": ["seed_agent.py"],
+  "cortex_args": ["cortex/seed_agent.py"],
   "socket_path": "/tmp/spine.sock",
   "control_plane_port": 4001,
   "context_threshold": 0.85,
