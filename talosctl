@@ -338,6 +338,11 @@ def run_daemon():
         if PID_FILE.exists(): PID_FILE.unlink()
         sys.exit(1)
 
+    print("[DAEMON] Starting X-ray...", flush=True)
+    res = subprocess.run(f"docker compose {compose_args} up -d xray", shell=True, cwd=RUNTIME_DIR, capture_output=True, text=True)
+    if res.returncode != 0:
+        print(f"[DAEMON] WARNING: X-ray startup failed: {res.stderr.strip()}", flush=True)
+
     talos_model = env.get("TALOS_MODEL", "")
     if ":" in talos_model:
         if not check_ollama_healthy():
