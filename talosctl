@@ -272,27 +272,69 @@ def cleanup(signum, frame):
 MAX_INFRA_RETRIES = 3
 MAX_COMPOSE_FAILURES = 5
 
+def check_ollama_healthy():
+    try:
+        resp = urllib.request.urlopen('http://localhost:11434/api/tags', timeout=3)
+        return resp.status == 200
+    except Exception:
+        return False
+
+def ollama_pull_model(model_name):
+    try:
+        result = subprocess.run(
+            ["ollama", "pull", model_name],
+            capture_output=True, text=True, timeout=300
+        )
+        return result.returncode == 0
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return False
+
+def ollama_has_model(model_name):
+    try:
+        result = subprocess.run(
+            ["ollama", "list"],
+            capture_output=True, text=True, timeout=5
+        )
+        return model_name in result.stdout
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return False
+
 def run_daemon():
     signal.signal(signal.SIGINT, cleanup)
     signal.signal(signal.SIGTERM, cleanup)
-    compose_args = get_compose_args()
+    compose_args = get_compose_args(cached=True)
     compose_failures = 0
 
     for d in [MEMORY_DIR, RUNTIME_DIR / "models"]:
         if not d.exists():
             d.mkdir(parents=True, exist_ok=True)
 
-    res = subprocess.run(f"docker compose {compose_args} up -d llamacpp", shell=True, cwd=RUNTIME_DIR, capture_output=True, text=True)
-    if res.returncode != 0 and "already in use" in res.stderr:
-        print("[DAEMON] Removing stale containers...", flush=True)
-        subprocess.run(f"docker compose {compose_args} down", shell=True, cwd=RUNTIME_DIR, capture_output=True)
+    env = load_env(RUNTIME_DIR / ".env")
+    model = env.get("DEFAULT_MODEL", "")
+    needs_llamacpp = model.endswith(".gguf") or not model
+
+    if needs_llamacpp:
         res = subprocess.run(f"docker compose {compose_args} up -d llamacpp", shell=True, cwd=RUNTIME_DIR, capture_output=True, text=True)
-    if res.returncode != 0:
-        print(f"\033[91m[DAEMON] FATAL: docker compose up llamacpp failed:\033[0m", flush=True)
-        print(res.stderr.strip(), flush=True)
-        HEALTH_FILE.write_text(json.dumps({"status": "failed", "error": "llamacpp startup failed", "ts": time.time()}))
-        if PID_FILE.exists(): PID_FILE.unlink()
-        sys.exit(1)
+        if res.returncode != 0 and "already in use" in res.stderr:
+            print("[DAEMON] Removing stale containers...", flush=True)
+            subprocess.run(f"docker compose {compose_args} down", shell=True, cwd=RUNTIME_DIR, capture_output=True)
+            res = subprocess.run(f"docker compose {compose_args} up -d llamacpp", shell=True, cwd=RUNTIME_DIR, capture_output=True, text=True)
+        if res.returncode != 0:
+            print(f"\033[91m[DAEMON] FATAL: docker compose up llamacpp failed:\033[0m", flush=True)
+            print(res.stderr.strip(), flush=True)
+            HEALTH_FILE.write_text(json.dumps({"status": "failed", "error": "llamacpp startup failed", "ts": time.time()}))
+            if PID_FILE.exists(): PID_FILE.unlink()
+            sys.exit(1)
+    else:
+        print("[DAEMON] No .gguf model configured, skipping llamacpp.", flush=True)
+
+    talos_model = env.get("TALOS_MODEL", "")
+    if ":" in talos_model:
+        if not check_ollama_healthy():
+            print("[DAEMON] WARNING: Ollama not reachable at localhost:11434", flush=True)
+        elif not ollama_has_model(talos_model):
+            print(f"[DAEMON] Pulling Ollama model: {talos_model}...", flush=True)
+            ollama_pull_model(talos_model)
 
     HEALTH_FILE.write_text(json.dumps({"status": "running", "phase": "waiting_infra", "ts": time.time()}))
 

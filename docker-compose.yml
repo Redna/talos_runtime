@@ -31,6 +31,8 @@ services:
       context: ./gate
       dockerfile: Dockerfile
     container_name: talos_gate
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     ports:
       - "4000:4000"
     volumes:
