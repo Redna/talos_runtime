@@ -25,6 +25,14 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     apt-get update && \
     apt-get install gh -y
 
+# Install trufflehog for secret scanning
+RUN ARCH=$(dpkg --print-architecture) && \
+    TRUFFLEHOG_VERSION=3.88.4 && \
+    wget -qO /tmp/trufflehog.tar.gz "https://github.com/trufflesecurity/trufflehog/releases/download/v${TRUFFLEHOG_VERSION}/trufflehog_${TRUFFLEHOG_VERSION}_linux_${ARCH}.tar.gz" && \
+    tar -xzf /tmp/trufflehog.tar.gz -C /usr/local/bin trufflehog && \
+    rm /tmp/trufflehog.tar.gz && \
+    trufflehog --version
+
 # Install uv for fast package management
 RUN curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR="/usr/local/bin" sh
 

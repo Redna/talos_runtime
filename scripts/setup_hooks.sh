@@ -14,6 +14,19 @@ export UV_PROJECT_ENVIRONMENT=/venv
 export UV_CACHE_DIR=/tmp/.uv-cache
 export PYTHONDONTWRITEBYTECODE=1
 
+# 0. Secret Scanning (Trufflehog)
+echo "[Pre-commit] Executing secret scan..."
+STAGED_FILES=$(git diff --cached --name-only --diff-filter=ACM | tr '\n' ' ')
+if [ -n "$STAGED_FILES" ]; then
+    if command -v trufflehog &>/dev/null; then
+        trufflehog filesystem --only-verified --fail --no-update $STAGED_FILES || { echo "[Error] Secret detected! Commit aborted."; exit 1; }
+    else
+        echo "[Pre-commit] WARNING: trufflehog not found, skipping secret scan."
+    fi
+else
+    echo "[Pre-commit] No staged files to scan."
+fi
+
 # 1. Syntax Validation (Fast-fail)
 echo "[Pre-commit] Executing syntax check..."
 for f in $(git diff --cached --name-only --diff-filter=ACM | grep '\.py$'); do
