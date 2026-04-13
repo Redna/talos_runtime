@@ -15,5 +15,6 @@
   "stall_timeout": 600000000000,
   "snapshot_interval": 10,
   "max_reversal_depth": 5,
-  "shed_tool_output_max_chars": 500
+  "shed_tool_output_max_chars": 500,
+  "gate_model": "gemma4:31b-cloud"
 }
