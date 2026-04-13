@@ -6,6 +6,8 @@ services:
     container_name: talos_agent
     security_opt:
       - seccomp=unconfined
+    ports:
+      - "4001:4001"
     env_file: .env
     environment:
       - TALOS_REPO_DIR=/app
