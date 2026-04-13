@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Talos X-ray</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <header id="top-bar">
+        <h1>TALOS X-RAY</h1>
+        <div id="model-info"></div>
+        <div id="ws-status" class="status-dot"></div>
+    </header>
+
+    <div id="context-bar">
+        <div id="context-progress">
+            <div id="context-fill"></div>
+            <span id="context-text">0%</span>
+        </div>
+        <div id="token-counters">
+            <span id="tokens-in">In: 0</span>
+            <span id="tokens-out">Out: 0</span>
+            <span id="tokens-total">Total: 0</span>
+            <span id="turn-count">Turn: 0</span>
+            <span id="spend">Spend: $0.00</span>
+        </div>
+    </div>
+
+    <main>
+        <section id="stream-panel">
+            <div id="stream-header">
+                <span id="stream-status" class="status-dot"></span>
+                <span id="stream-turn">Turn &mdash;</span>
+                <span id="stream-model">&mdash;</span>
+                <span id="stream-time">&mdash;</span>
+            </div>
+            <div id="stream-content"></div>
+        </section>
+
+        <aside id="sidebar">
+            <div id="health-panel" class="card">
+                <h2>Health</h2>
+                <div id="container-dots"></div>
+                <div id="spine-status"></div>
+                <div id="lazarus"></div>
+            </div>
+
+            <div id="event-log" class="card">
+                <h2>Events</h2>
+                <div id="event-list"></div>
+            </div>
+        </aside>
+    </main>
+
+    <footer>
+        <section id="commit-panel" class="card">
+            <h2>Commit Timeline</h2>
+            <div id="commit-info"></div>
+        </section>
+
+        <section id="actions-panel" class="card">
+            <h2>Actions</h2>
+            <button onclick="sendCommand('force_restart')">Restart Cortex</button>
+            <button onclick="sendCommand('pause')">Pause</button>
+            <button onclick="sendCommand('resume')">Resume</button>
+            <button onclick="sendCommand('force_fold')">Fold Context</button>
+        </section>
+    </footer>
+
+    <script src="/static/app.js"></script>
+</body>
+</html>
