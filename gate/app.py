@@ -39,6 +39,16 @@ OLLAMA_HOST = os.getenv("OLLAMA_HOST", "host.docker.internal:11434")
 # State
 PRICING_CACHE: Dict[str, Dict[str, float]] = {}
 
+_xray_subscribers: list[asyncio.Queue] = []
+
+
+def _xray_broadcast(event: dict):
+    if not _xray_subscribers:
+        return
+    for q in _xray_subscribers:
+        q.put_nowait(event)
+
+
 # Routing configuration
 BACKENDS = {
     "local": "http://llamacpp:8080/v1/chat/completions",
