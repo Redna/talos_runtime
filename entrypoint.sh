@@ -18,6 +18,14 @@ sudo -u "$USER_NAME" -H git config --global user.name "Talos"
 sudo -u "$USER_NAME" -H git config --global user.email "talos@agent.local"
 sudo -u "$USER_NAME" -H git config --global --add safe.directory /app
 
+# Configure GitHub credentials if token is provided
+if [ -n "$GITHUB_TOKEN" ]; then
+    sudo -u "$USER_NAME" -H git config --global credential.helper "store"
+    echo "https://x-access-token:${GITHUB_TOKEN}@github.com" > /tmp/git_credentials
+    sudo -u "$USER_NAME" -H git config --global credential.helper "store --file /tmp/git_credentials"
+    sudo -u "$USER_NAME" -H git config --global --add safe.directory /app
+fi
+
 # Ensure Git hooks are active
 if [ -f "/runtime_scripts/setup_hooks.sh" ]; then
     cd /app && /bin/bash /runtime_scripts/setup_hooks.sh

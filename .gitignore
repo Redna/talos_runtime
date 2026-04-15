@@ -4,9 +4,10 @@
 # Spine observability (Cortex read-only)
 /spine/
 
-# Secrets
+# Secrets (keep .env ignored, but allow .env.example)
 .env
 .env.*
+!.env.example
 *.key
 *.pem
 *.log

@@ -16,6 +16,8 @@ services:
       - DEFAULT_MODEL=${DEFAULT_MODEL}
       - TALOS_MODEL=${TALOS_MODEL}
       - SPINE_SOCKET=/tmp/spine.sock
+      - GITHUB_TOKEN=${GITHUB_TOKEN:-}
+      - GITHUB_SSH_KEY=${GITHUB_SSH_KEY:-}
     volumes:
       - ./memory:/memory
       - spine_observability:/spine
