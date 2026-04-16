@@ -66,9 +66,15 @@ MODEL_MAP = {
     "Qwen3.5-27B-Q4_K_M.gguf": "local",
     "mistralai_Mistral-Small-3.2-24B-Instruct-2506-Q4_K_M.gguf": "local",
     # Ollama models (local + cloud)
+    "talos": "ollama",
     "gemma4:31b-cloud": "ollama",
     "minimax-m2.7:cloud": "ollama",
     "glm-5.1:cloud": "ollama",
+}
+
+# Model name remapping for backends that need different model names
+MODEL_REMAP = {
+    "talos": "gemma4:31b-cloud",
 }
 
 
@@ -210,6 +216,36 @@ async def chat_completions(request: Request, background_tasks: BackgroundTasks):
     else:
         backend_key = MODEL_MAP.get(model, "local")
 
+    if model in MODEL_REMAP:
+        body["model"] = MODEL_REMAP[model]
+
+    # Broadcast trajectory: full conversation context the agent sees
+    raw_messages = body.get("messages", [])
+    trajectory_messages = []
+    for m in raw_messages:
+        msg = {"role": m.get("role", "")}
+        content = m.get("content", "")
+        if m.get("role") == "tool" and isinstance(content, str) and len(content) > 2000:
+            msg["content"] = (
+                content[:2000] + f"[...truncated, {len(content)} chars total]"
+            )
+        else:
+            msg["content"] = content
+        if "tool_calls" in m:
+            msg["tool_calls"] = m["tool_calls"]
+        if "tool_call_id" in m:
+            msg["tool_call_id"] = m["tool_call_id"]
+        trajectory_messages.append(msg)
+
+    _xray_broadcast(
+        {
+            "type": "trajectory",
+            "messages": trajectory_messages,
+            "model": model,
+            "ts": time.time(),
+        }
+    )
+
     if backend_key != "local" and get_current_spend() >= DAILY_BUDGET_LIMIT:
         return Response(
             content=json.dumps(
@@ -343,11 +379,52 @@ async def chat_completions(request: Request, background_tasks: BackgroundTasks):
 
     else:
         try:
+            _xray_broadcast({"type": "think_start", "model": model, "ts": time.time()})
             async with httpx.AsyncClient(timeout=1800.0) as client:
                 resp = await client.post(url, json=body, headers=headers)
                 resp.raise_for_status()
 
                 resp_json = resp.json()
+
+                # Compute context_pct if backend didn't provide it
+                if "context_pct" not in resp_json.get("usage", {}):
+                    prompt_tokens = resp_json.get("usage", {}).get("prompt_tokens", 0)
+                    resp_json.setdefault("usage", {})["context_pct"] = (
+                        round(prompt_tokens / LOCAL_CONTEXT_WINDOW, 4)
+                        if prompt_tokens and LOCAL_CONTEXT_WINDOW
+                        else 0.0
+                    )
+
+                # Broadcast assistant content as stream tokens for X-ray
+                if resp_json.get("choices"):
+                    content = (
+                        resp_json["choices"][0].get("message", {}).get("content", "")
+                    )
+                    if content:
+                        _xray_broadcast(
+                            {
+                                "type": "stream_token",
+                                "content": content,
+                                "model": model,
+                                "ts": time.time(),
+                            }
+                        )
+                    tool_calls = (
+                        resp_json["choices"][0].get("message", {}).get("tool_calls", [])
+                    )
+                    for tc in tool_calls:
+                        func = tc.get("function", {})
+                        _xray_broadcast(
+                            {
+                                "type": "tool_call",
+                                "id": tc.get("id", ""),
+                                "name": func.get("name", ""),
+                                "arguments": func.get("arguments", "{}"),
+                                "model": model,
+                                "ts": time.time(),
+                            }
+                        )
+
                 _xray_broadcast(
                     {
                         "type": "think_end",
