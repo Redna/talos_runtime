@@ -29,7 +29,7 @@ if git ls-remote --exit-code "$GIT_REMOTE" "$GIT_BRANCH" > /dev/null 2>&1; then
     else
         git checkout -b "$GIT_BRANCH" --track "$GIT_REMOTE/$GIT_BRANCH"
     fi
-    if ! git diff --quiet HEAD || ! git diff --cached --quiet; then
+    if [ -n "$(git status --porcelain)" ]; then
         echo "[Entrypoint] Reverting uncommitted changes..."
         git checkout -- .
     fi
