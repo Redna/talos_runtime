@@ -48,9 +48,10 @@ class XRayClient:
         self._running = False
 
     def get_full_snapshot(self) -> dict:
+        events = self._events if isinstance(self._events, list) else []
         return {
             "state": self._state,
-            "events": self._events[-200:],
+            "events": events[-200:],
             "commit": self._commit,
             "container_status": self._container_status,
         }
@@ -108,7 +109,20 @@ class XRayClient:
                     resp = await client.get(f"{self.spine_url}/state")
                     if resp.status_code == 200:
                         self._state = resp.json()
-                        self.on_event({"type": "state_update", **self._state})
+                    try:
+                        health_resp = await client.get(f"{self.spine_url}/health")
+                        if health_resp.status_code == 200:
+                            health_data = health_resp.json()
+                            self._state["spine_status"] = health_data.get(
+                                "status", "unknown"
+                            )
+                            if "consecutive_failures" in health_data:
+                                self._state["consecutive_failures"] = health_data[
+                                    "consecutive_failures"
+                                ]
+                    except Exception:
+                        self._state["spine_status"] = "offline"
+                    self.on_event({"type": "state_update", **self._state})
                     backoff = 1.0
             except Exception:
                 backoff = min(backoff * 2, 30.0)
@@ -120,7 +134,9 @@ class XRayClient:
                 async with httpx.AsyncClient(timeout=5.0) as client:
                     resp = await client.get(f"{self.spine_url}/events?tail=200")
                     if resp.status_code == 200:
-                        self._events = resp.json()
+                        data = resp.json()
+                        if isinstance(data, list):
+                            self._events = data
             except Exception:
                 pass
             await asyncio.sleep(10)
@@ -140,13 +156,21 @@ class XRayClient:
                 except Exception:
                     status[name] = "offline"
             try:
+                ollama_host = os.environ.get(
+                    "OLLAMA_HOST", "host.docker.internal:11434"
+                )
+                if not ollama_host.startswith("http"):
+                    ollama_host = f"http://{ollama_host}"
                 async with httpx.AsyncClient(timeout=3.0) as client:
-                    resp = await client.get("http://llamacpp:8080/health")
-                    status["llamacpp"] = (
-                        "healthy" if resp.status_code == 200 else "unhealthy"
+                    resp = await client.get(f"{ollama_host}/api/tags")
+                    data = resp.json()
+                    status["ollama"] = (
+                        "healthy"
+                        if isinstance(data, dict) and "models" in data
+                        else "unhealthy"
                     )
             except Exception:
-                status["llamacpp"] = "offline"
+                status["ollama"] = "offline"
             self._container_status = status
             self.on_event({"type": "container_status", **status})
             await asyncio.sleep(10)

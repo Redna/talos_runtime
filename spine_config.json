@@ -12,7 +12,7 @@
   "active_window": 5,
   "max_context_tokens": 71680,
   "gate_url": "http://gate:4000",
-  "stall_timeout": 600000000000,
+  "stall_timeout": 600,
   "snapshot_interval": 10,
   "max_reversal_depth": 5,
   "shed_tool_output_max_chars": 500,

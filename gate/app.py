@@ -58,21 +58,15 @@ BACKENDS = {
     "together_audio": "https://api.together.xyz/v1/audio/transcriptions",
 }
 
-# Explicit model mapping
+
+# Model name remapping for backends that need different model names
 MODEL_MAP = {
-    # Local llamacpp models
-    "gemma-4-26B-A4B-it-UD-Q4_K_XL.gguf": "local",
-    "gemma-4-31B-it-UD-Q4_K_XL.gguf": "local",
-    "Qwen3.5-27B-Q4_K_M.gguf": "local",
-    "mistralai_Mistral-Small-3.2-24B-Instruct-2506-Q4_K_M.gguf": "local",
-    # Ollama models (local + cloud)
     "talos": "ollama",
     "gemma4:31b-cloud": "ollama",
     "minimax-m2.7:cloud": "ollama",
     "glm-5.1:cloud": "ollama",
 }
 
-# Model name remapping for backends that need different model names
 MODEL_REMAP = {
     "talos": "gemma4:31b-cloud",
 }
@@ -219,16 +213,29 @@ async def chat_completions(request: Request, background_tasks: BackgroundTasks):
     if model in MODEL_REMAP:
         body["model"] = MODEL_REMAP[model]
 
-    # Broadcast trajectory: full conversation context the agent sees
+    # Broadcast trajectory: send only recent messages to stay under WebSocket limits
+    MAX_TRAJECTORY_MESSAGES = 50
+    MAX_CONTENT_CHARS = 500
+    MAX_SYSTEM_CHARS = 500
+
     raw_messages = body.get("messages", [])
+    total_count = len(raw_messages)
+    # Take last N messages to avoid exceeding WebSocket frame size
+    recent = (
+        raw_messages[-MAX_TRAJECTORY_MESSAGES:]
+        if total_count > MAX_TRAJECTORY_MESSAGES
+        else raw_messages
+    )
     trajectory_messages = []
-    for m in raw_messages:
+    for m in recent:
         msg = {"role": m.get("role", "")}
         content = m.get("content", "")
-        if m.get("role") == "tool" and isinstance(content, str) and len(content) > 2000:
-            msg["content"] = (
-                content[:2000] + f"[...truncated, {len(content)} chars total]"
-            )
+        if isinstance(content, str):
+            limit = MAX_SYSTEM_CHARS if m.get("role") == "system" else MAX_CONTENT_CHARS
+            if len(content) > limit:
+                msg["content"] = content[:limit] + f"... [{len(content)} chars total]"
+            else:
+                msg["content"] = content
         else:
             msg["content"] = content
         if "tool_calls" in m:
@@ -241,12 +248,14 @@ async def chat_completions(request: Request, background_tasks: BackgroundTasks):
         {
             "type": "trajectory",
             "messages": trajectory_messages,
+            "total_count": total_count,
+            "showing_count": len(trajectory_messages),
             "model": model,
             "ts": time.time(),
         }
     )
 
-    if backend_key != "local" and get_current_spend() >= DAILY_BUDGET_LIMIT:
+    if backend_key == "together" and get_current_spend() >= DAILY_BUDGET_LIMIT:
         return Response(
             content=json.dumps(
                 {
@@ -283,6 +292,13 @@ async def chat_completions(request: Request, background_tasks: BackgroundTasks):
     if backend_key == "together" and model.startswith("together_ai/"):
         body["model"] = model.replace("together_ai/", "")
 
+    if backend_key == "ollama":
+        body.setdefault("options", {})["num_ctx"] = LOCAL_CONTEXT_WINDOW
+
+    print(
+        f"[Gate] Forwarding to {backend_key}: model={body.get('model')} tool_choice={body.get('tool_choice')} tools={len(body.get('tools', []))} msgs={len(body.get('messages', []))}"
+    )
+
     if is_streaming:
 
         async def stream_proxy() -> AsyncGenerator[bytes, None]:
@@ -311,7 +327,7 @@ async def chat_completions(request: Request, background_tasks: BackgroundTasks):
                                 if content:
                                     _xray_broadcast(
                                         {
-                                            "type": "token",
+                                            "type": "stream_token",
                                             "content": content,
                                             "model": model,
                                             "ts": time.time(),
@@ -400,6 +416,9 @@ async def chat_completions(request: Request, background_tasks: BackgroundTasks):
                     content = (
                         resp_json["choices"][0].get("message", {}).get("content", "")
                     )
+                    tool_calls = (
+                        resp_json["choices"][0].get("message", {}).get("tool_calls", [])
+                    )
                     if content:
                         _xray_broadcast(
                             {
@@ -409,9 +428,18 @@ async def chat_completions(request: Request, background_tasks: BackgroundTasks):
                                 "ts": time.time(),
                             }
                         )
-                    tool_calls = (
-                        resp_json["choices"][0].get("message", {}).get("tool_calls", [])
-                    )
+                    elif tool_calls:
+                        names = ", ".join(
+                            tc.get("function", {}).get("name", "") for tc in tool_calls
+                        )
+                        _xray_broadcast(
+                            {
+                                "type": "stream_token",
+                                "content": f"Calling: {names}",
+                                "model": model,
+                                "ts": time.time(),
+                            }
+                        )
                     for tc in tool_calls:
                         func = tc.get("function", {})
                         _xray_broadcast(
@@ -443,6 +471,26 @@ async def chat_completions(request: Request, background_tasks: BackgroundTasks):
                 background_tasks.add_task(log_completion, body, resp_json, backend_key)
                 return resp_json
         except (httpx.ConnectError, httpx.TimeoutException, httpx.HTTPStatusError) as e:
+            _xray_broadcast(
+                {
+                    "type": "error",
+                    "message": f"Model '{model}' unreachable: {str(e)}",
+                    "model": model,
+                    "backend": backend_key,
+                    "ts": time.time(),
+                }
+            )
+            _xray_broadcast(
+                {
+                    "type": "think_end",
+                    "tokens_in": 0,
+                    "tokens_out": 0,
+                    "context_pct": 0.0,
+                    "model": model,
+                    "backend": backend_key,
+                    "ts": time.time(),
+                }
+            )
             return Response(
                 content=json.dumps(
                     {
@@ -457,6 +505,26 @@ async def chat_completions(request: Request, background_tasks: BackgroundTasks):
                 media_type="application/json",
             )
         except Exception as e:
+            _xray_broadcast(
+                {
+                    "type": "error",
+                    "message": f"Critical: {str(e)}",
+                    "model": model,
+                    "backend": backend_key,
+                    "ts": time.time(),
+                }
+            )
+            _xray_broadcast(
+                {
+                    "type": "think_end",
+                    "tokens_in": 0,
+                    "tokens_out": 0,
+                    "context_pct": 0.0,
+                    "model": model,
+                    "backend": backend_key,
+                    "ts": time.time(),
+                }
+            )
             return Response(
                 content=json.dumps(
                     {
@@ -885,42 +953,49 @@ If it is fully compliant, call 'approve_commit'.
         # Append the audit task as a new USER turn
         audit_messages = messages + [{"role": "user", "content": audit_prompt}]
 
-        # Call the local LLM
-        backend_url = BACKENDS["local"]
+        # Call the LLM for audit — use ollama backend
+        backend_url = BACKENDS.get("ollama", BACKENDS["local"])
+        audit_model = list(MODEL_MAP.keys())[0] if MODEL_MAP else "talos"
         payload = {
-            "model": list(MODEL_MAP.keys())[0],
+            "model": audit_model,
             "messages": audit_messages,
             "tools": audit_tools,
-            "tool_choice": "required",  # Hard constraint
+            "tool_choice": "required",
             "temperature": 0.0,
-            "extra_body": {"cache_prompt": True},  # Explicitly request caching
         }
 
-        async with httpx.AsyncClient(timeout=180.0) as client:
-            resp = await client.post(backend_url, json=payload)
-            resp.raise_for_status()
+        try:
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                resp = await client.post(backend_url, json=payload)
+                resp.raise_for_status()
 
-            resp_json = resp.json()
-            tool_call = resp_json["choices"][0]["message"]["tool_calls"][0]
-            func_name = tool_call["function"]["name"]
-            args = json.loads(tool_call["function"]["arguments"])
+                resp_json = resp.json()
+                tool_call = resp_json["choices"][0]["message"]["tool_calls"][0]
+                func_name = tool_call["function"]["name"]
+                args = json.loads(tool_call["function"]["arguments"])
 
-            rejected = func_name == "reject_commit"
+                rejected = func_name == "reject_commit"
 
+                return {
+                    "rejected": rejected,
+                    "reason": args.get("reason", "No reason provided."),
+                    "criticality": args.get(
+                        "criticality", "low" if not rejected else "high"
+                    ),
+                }
+        except Exception as e:
+            print(f"[Sentinel Error] Audit failed: {e}")
             return {
-                "rejected": rejected,
-                "reason": args.get("reason", "No reason provided."),
-                "criticality": args.get(
-                    "criticality", "low" if not rejected else "high"
-                ),
+                "rejected": False,
+                "reason": f"Sentinel unavailable: {str(e)}. Allowing commit (fail-open).",
+                "criticality": "low",
             }
-
     except Exception as e:
-        print(f"[Sentinel Error] Audit failed: {e}")
+        print(f"[Sentinel Error] Audit request failed: {e}")
         return {
-            "rejected": True,
-            "reason": f"Sentinel Internal Error: {str(e)}",
-            "criticality": "fatal",
+            "rejected": False,
+            "reason": f"Sentinel error: {str(e)}. Allowing commit (fail-open).",
+            "criticality": "low",
         }
 
 

@@ -18,10 +18,12 @@ services:
       - DEFAULT_MODEL=${DEFAULT_MODEL}
       - TALOS_MODEL=${TALOS_MODEL}
       - SPINE_SOCKET=/tmp/spine.sock
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN:-}
+      - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID:-0}
     volumes:
       - ./memory:/memory
       - spine_observability:/spine
-      - ./talos:/app
+      - app_data:/app
       - ./.git/modules/talos:/runtime_git
       - ./spine_config.json:/spine/spine_config.json:ro
     networks:
@@ -68,6 +70,9 @@ services:
     environment:
       - GATE_URL=http://gate:4000
       - SPINE_URL=http://talos_agent:4001
+      - OLLAMA_HOST=${OLLAMA_HOST:-host.docker.internal:11434}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     volumes:
       - ./xray_data:/data
     depends_on:
@@ -117,4 +122,5 @@ networks:
     driver: bridge
 
 volumes:
+  app_data:
   spine_observability:

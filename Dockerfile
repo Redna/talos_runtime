@@ -48,6 +48,9 @@ COPY talos_runtime/talos/ .
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --frozen --no-dev --no-progress
 
+# 4a. Preserve pristine spine files (restored on each startup to prevent cortex corruption)
+RUN cp -a /app/spine /spine_pristine
+
 # 4. Add runtime scripts (Hardened)
 COPY talos_runtime/scripts/ /runtime_scripts/
 RUN chown -R root:root /runtime_scripts && chmod -R 555 /runtime_scripts && \
