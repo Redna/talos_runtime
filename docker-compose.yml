@@ -25,7 +25,6 @@ services:
     volumes:
       - ./memory:/memory
       - spine_observability:/spine
-      - app_data:/app
       - ./.git/modules/talos:/runtime_git
       - ./spine_config.json:/spine/spine_config.json:ro
     networks:
@@ -124,5 +123,4 @@ networks:
     driver: bridge
 
 volumes:
-  app_data:
   spine_observability:

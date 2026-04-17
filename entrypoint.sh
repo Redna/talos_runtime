@@ -1,51 +1,28 @@
 #!/bin/bash
 
 git config --global --add safe.directory '*'
-git config --global --add safe.directory /app
-git config --global --add safe.directory /tmp/runtime_git 2>/dev/null || true
 
 USER_ID=${PUID:-1000}
 GROUP_ID=${PGID:-1000}
 
-if ! getent group "$GROUP_ID" >/dev/null; then groupadd -g "$GROUP_ID" talos; fi
-if ! getent passwd "$USER_ID" >/dev/null; then useradd -u "$USER_ID" -g "$GROUP_ID" -m -s /bin/bash talos; fi
+if ! getent group "$GROUP_ID" > /dev/null 2>&1; then groupadd -g "$GROUP_ID" talos; fi
+if ! getent passwd "$USER_ID" > /dev/null 2>&1; then useradd -u "$USER_ID" -g "$GROUP_ID" -m -s /bin/bash talos; fi
 
 USER_NAME=$(getent passwd "$USER_ID" | cut -d: -f1)
 
 GIT_REMOTE=origin
 GIT_BRANCH=feat/talos
 
-if [ -f /app/.git ] && grep -q "gitdir:" /app/.git && [ -d /runtime_git/objects ]; then
-    echo "[Entrypoint] Setting up git worktree for submodule..."
-    rm -rf /tmp/runtime_git 2>/dev/null || true
-    cp -a /runtime_git /tmp/runtime_git
-    if [ -d /tmp/runtime_git ] && git -C /tmp/runtime_git rev-parse --git-dir > /dev/null 2>&1; then
-        sed -i "s|worktree = .*|worktree = /app|" /tmp/runtime_git/config
-        echo "gitdir: /tmp/runtime_git" > /app/.git
-    else
-        echo "[Entrypoint] Warning: /runtime_git is not a valid git repo, skipping worktree setup"
-        rm -f /app/.git
-    fi
-fi
-
 cd /app
 
-if git ls-remote --exit-code "$GIT_REMOTE" "$GIT_BRANCH" > /dev/null 2>&1; then
-    echo "[Entrypoint] Branch $GIT_BRANCH exists on $GIT_REMOTE"
-    if git rev-parse --verify "$GIT_BRANCH" > /dev/null 2>&1; then
-        git checkout "$GIT_BRANCH"
-        git pull --rebase "$GIT_REMOTE" "$GIT_BRANCH"
-    else
-        git checkout -b "$GIT_BRANCH" --track "$GIT_REMOTE/$GIT_BRANCH"
-    fi
-    if [ -n "$(git status --porcelain)" ]; then
-        echo "[Entrypoint] Reverting uncommitted changes..."
-        git checkout -- .
-    fi
-else
-    echo "[Entrypoint] Branch $GIT_BRANCH does not exist on $GIT_REMOTE, creating..."
-    git checkout -b "$GIT_BRANCH"
-    git push -u "$GIT_REMOTE" "$GIT_BRANCH"
+echo "[Entrypoint] Fetching latest from $GIT_REMOTE/$GIT_BRANCH..."
+git fetch "$GIT_REMOTE" "$GIT_BRANCH"
+git checkout "$GIT_BRANCH"
+git reset --hard "$GIT_REMOTE/$GIT_BRANCH"
+
+if [ -n "$(git status --porcelain)" ]; then
+    echo "[Entrypoint] Reverting uncommitted changes..."
+    git checkout -- .
 fi
 
 echo "[Entrypoint] Current branch: $(git rev-parse --abbrev-ref HEAD)"
@@ -60,15 +37,9 @@ mkdir -p /spine/events /spine/snapshots /spine/crashes
 chown -R "$USER_NAME":"$GROUP_ID" /spine/events /spine/snapshots /spine/crashes
 
 git config --global --add safe.directory /app
-if [ -d /tmp/runtime_git ]; then
-    git config --global --add safe.directory /tmp/runtime_git
-fi
 sudo -u "$USER_NAME" -H git config --global user.name "Talos"
 sudo -u "$USER_NAME" -H git config --global user.email "talos@agent.local"
 sudo -u "$USER_NAME" -H git config --global --add safe.directory /app
-if [ -d /tmp/runtime_git ]; then
-    sudo -u "$USER_NAME" -H git config --global --add safe.directory /tmp/runtime_git
-fi
 
 if [ -n "$GITHUB_TOKEN" ]; then
     echo "https://x-access-token:${GITHUB_TOKEN}@github.com" > /tmp/git_credentials
@@ -81,15 +52,8 @@ if [ -f "/runtime_scripts/setup_hooks.sh" ]; then
 fi
 
 echo "Locking down semantic firewall and git hooks..."
-
 chown -R root:root /runtime_scripts
-GIT_HOOKS_DIR="/app/.git/hooks"
-if [ -f /app/.git ]; then
-    GIT_HOOKS_DIR="/tmp/runtime_git/hooks"
-fi
-chown -R root:root "$GIT_HOOKS_DIR"
 chmod -R 755 /runtime_scripts
-chmod -R 755 "$GIT_HOOKS_DIR"
 
 echo "Containment established."
 
@@ -114,8 +78,6 @@ fi
 if git -C /app rev-parse HEAD > /dev/null 2>&1; then
   git -C /app rev-parse HEAD > /spine/last_candidate_commit
   echo "[Entrypoint] Recorded candidate commit"
-else
-  echo "[Entrypoint] WARNING: /app is not a git repository, skipping candidate commit"
 fi
 
 echo "Awaking Talos as $USER_NAME ($USER_ID:$GROUP_ID)..."
