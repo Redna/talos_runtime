@@ -9,18 +9,62 @@ if ! getent passwd "$USER_ID" >/dev/null; then useradd -u "$USER_ID" -g "$GROUP_
 
 USER_NAME=$(getent passwd "$USER_ID" | cut -d: -f1)
 
-sudo -u "$USER_NAME" -H git config --global user.name "Talos"
-sudo -u "$USER_NAME" -H git config --global user.email "talos@agent.local"
-sudo -u "$USER_NAME" -H git config --global --add safe.directory /app
-sudo -u "$USER_NAME" -H git config --global --add safe.directory /runtime_git
-git config --global --add safe.directory /app
-git config --global --add safe.directory /runtime_git
+GIT_REMOTE=origin
+GIT_BRANCH=feat/talos
 
-if [ -f /app/.git ] && grep -q "gitdir:" /app/.git; then
+if [ -f /app/.git ] && grep -q "gitdir:" /app/.git && [ -d /runtime_git/objects ]; then
     echo "[Entrypoint] Setting up git worktree for submodule..."
     cp -a /runtime_git /tmp/runtime_git
     sed -i "s|worktree = .*|worktree = /app|" /tmp/runtime_git/config
     echo "gitdir: /tmp/runtime_git" > /app/.git
+fi
+
+cd /app
+
+if git ls-remote --exit-code "$GIT_REMOTE" "$GIT_BRANCH" > /dev/null 2>&1; then
+    echo "[Entrypoint] Branch $GIT_BRANCH exists on $GIT_REMOTE"
+    if git rev-parse --verify "$GIT_BRANCH" > /dev/null 2>&1; then
+        git checkout "$GIT_BRANCH"
+        git pull --rebase "$GIT_REMOTE" "$GIT_BRANCH"
+    else
+        git checkout -b "$GIT_BRANCH" --track "$GIT_REMOTE/$GIT_BRANCH"
+    fi
+    if ! git diff --quiet HEAD || ! git diff --cached --quiet; then
+        echo "[Entrypoint] Reverting uncommitted changes..."
+        git checkout -- .
+    fi
+else
+    echo "[Entrypoint] Branch $GIT_BRANCH does not exist on $GIT_REMOTE, creating..."
+    git checkout -b "$GIT_BRANCH"
+    git push -u "$GIT_REMOTE" "$GIT_BRANCH"
+fi
+
+echo "[Entrypoint] Current branch: $(git rev-parse --abbrev-ref HEAD)"
+echo "[Entrypoint] Current commit: $(git rev-parse HEAD)"
+
+echo "Restoring pristine spine files..."
+cp -a /spine_pristine/. /app/spine/
+
+chown -R "$USER_NAME":"$GROUP_ID" /app
+chown -R "$USER_NAME":"$GROUP_ID" /memory
+mkdir -p /spine/events /spine/snapshots /spine/crashes
+chown -R "$USER_NAME":"$GROUP_ID" /spine/events /spine/snapshots /spine/crashes
+
+git config --global --add safe.directory /app
+if [ -d /tmp/runtime_git ]; then
+    git config --global --add safe.directory /tmp/runtime_git
+fi
+sudo -u "$USER_NAME" -H git config --global user.name "Talos"
+sudo -u "$USER_NAME" -H git config --global user.email "talos@agent.local"
+sudo -u "$USER_NAME" -H git config --global --add safe.directory /app
+if [ -d /tmp/runtime_git ]; then
+    sudo -u "$USER_NAME" -H git config --global --add safe.directory /tmp/runtime_git
+fi
+
+if [ -n "$GITHUB_TOKEN" ]; then
+    echo "https://x-access-token:${GITHUB_TOKEN}@github.com" > /tmp/git_credentials
+    chmod 600 /tmp/git_credentials
+    sudo -u "$USER_NAME" -H git config --global credential.helper "store --file /tmp/git_credentials"
 fi
 
 if [ -f "/runtime_scripts/setup_hooks.sh" ]; then
@@ -66,4 +110,5 @@ else
 fi
 
 echo "Awaking Talos as $USER_NAME ($USER_ID:$GROUP_ID)..."
-exec gosu "$USER_NAME" "$@"
+echo "[Entrypoint] Spine managing Cortex lifecycle. Waiting for Spine process..."
+wait $SPINE_PID
