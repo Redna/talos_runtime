@@ -1,5 +1,8 @@
 #!/bin/bash
-set -e
+
+git config --global --add safe.directory '*'
+git config --global --add safe.directory /app
+git config --global --add safe.directory /tmp/runtime_git 2>/dev/null || true
 
 USER_ID=${PUID:-1000}
 GROUP_ID=${PGID:-1000}
@@ -14,9 +17,15 @@ GIT_BRANCH=feat/talos
 
 if [ -f /app/.git ] && grep -q "gitdir:" /app/.git && [ -d /runtime_git/objects ]; then
     echo "[Entrypoint] Setting up git worktree for submodule..."
+    rm -rf /tmp/runtime_git 2>/dev/null || true
     cp -a /runtime_git /tmp/runtime_git
-    sed -i "s|worktree = .*|worktree = /app|" /tmp/runtime_git/config
-    echo "gitdir: /tmp/runtime_git" > /app/.git
+    if [ -d /tmp/runtime_git ] && git -C /tmp/runtime_git rev-parse --git-dir > /dev/null 2>&1; then
+        sed -i "s|worktree = .*|worktree = /app|" /tmp/runtime_git/config
+        echo "gitdir: /tmp/runtime_git" > /app/.git
+    else
+        echo "[Entrypoint] Warning: /runtime_git is not a valid git repo, skipping worktree setup"
+        rm -f /app/.git
+    fi
 fi
 
 cd /app
