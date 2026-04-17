@@ -30,6 +30,8 @@ class XRayClient:
         self._data_dir.mkdir(parents=True, exist_ok=True)
         self._stats_file = self._data_dir / "token_stats.json"
         self._last_stats_write = 0.0
+        self.is_paused = False
+        self.call_pending = False
 
     async def start(self):
         self._running = True
@@ -74,6 +76,15 @@ class XRayClient:
                             try:
                                 event = json.loads(payload)
                                 self.on_event(event)
+                                if event.get("type") == "think_start":
+                                    self.call_pending = True
+                                elif (
+                                    event.get("type") == "think_end"
+                                    or event.get("type") == "tool_call"
+                                ):
+                                    self.call_pending = False
+                                elif event.get("stream_token") and event.get("think"):
+                                    self.call_pending = True
                             except json.JSONDecodeError:
                                 pass
             except Exception:
@@ -109,6 +120,7 @@ class XRayClient:
                     resp = await client.get(f"{self.spine_url}/state")
                     if resp.status_code == 200:
                         self._state = resp.json()
+                        self.is_paused = self._state.get("is_paused", False)
                     try:
                         health_resp = await client.get(f"{self.spine_url}/health")
                         if health_resp.status_code == 200:
@@ -122,7 +134,14 @@ class XRayClient:
                                 ]
                     except Exception:
                         self._state["spine_status"] = "offline"
-                    self.on_event({"type": "state_update", **self._state})
+                    self.on_event(
+                        {
+                            "type": "state_update",
+                            "is_paused": self.is_paused,
+                            "call_pending": self.call_pending,
+                            **self._state,
+                        }
+                    )
                     backoff = 1.0
             except Exception:
                 backoff = min(backoff * 2, 30.0)
