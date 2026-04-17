@@ -7,9 +7,10 @@ if [ ! -f /.dockerenv ]; then
 fi
 
 HOOK_DIR=$(cd /app && git rev-parse --git-path hooks)
-HOOK_FILE="$HOOK_DIR/pre-commit"
+PRE_COMMIT_FILE="$HOOK_DIR/pre-commit"
+POST_COMMIT_FILE="$HOOK_DIR/post-commit"
 
-cat > "$HOOK_FILE" << 'EOF'
+cat > "$PRE_COMMIT_FILE" << 'EOF'
 #!/bin/bash
 export UV_PROJECT_ENVIRONMENT=/venv
 export UV_CACHE_DIR=/tmp/.uv-cache
@@ -47,5 +48,20 @@ git rev-parse HEAD > /spine/last_candidate_commit
 echo "[Pre-commit] Candidate commit recorded."
 EOF
 
-chmod +x "$HOOK_FILE"
-echo "Git pre-commit hook installed successfully."
+cat > "$POST_COMMIT_FILE" << 'EOF'
+#!/bin/bash
+# Post-commit hook: automatically push to origin/feat/talos
+
+GIT_REMOTE=${GIT_REMOTE:-origin}
+GIT_BRANCH=${GIT_BRANCH:-feat/talos}
+
+echo "[Post-commit] Pushing to $GIT_REMOTE/$GIT_BRANCH..."
+git push "$GIT_REMOTE" "$GIT_BRANCH" 2>&1 || {
+    echo "[Post-commit] WARNING: Push failed. Agent will receive a system notice on next turn."
+    exit 0  # Never block commits due to push failure
+}
+EOF
+
+chmod +x "$PRE_COMMIT_FILE"
+chmod +x "$POST_COMMIT_FILE"
+echo "Git hooks installed successfully."
