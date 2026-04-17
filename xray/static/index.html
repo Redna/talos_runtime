@@ -14,6 +14,14 @@
             <button class="tab" data-view="stream">Stream</button>
         </nav>
         <div id="top-stats">
+            <span id="status-badge" class="status-badge status-idle">
+                <span id="status-dot">●</span>
+                <span id="status-text">Idle</span>
+            </span>
+            <span id="pending-indicator" class="pending-indicator hidden">
+                <span class="spinner"></span>
+                <span id="pending-text">Waiting on LLM...</span>
+            </span>
             <span id="model-info"></span>
             <span id="turn-count">Turn: 0</span>
             <span id="spend">Spend: $0.00</span>
@@ -51,7 +59,7 @@
                 <h2>Actions</h2>
                 <div class="actions">
                     <button onclick="sendCommand('force_restart')">Restart Cortex</button>
-                    <button onclick="sendCommand('pause')">Pause</button>
+                    <button id="pause-btn" onclick="sendCommand('pause')">Pause</button>
                     <button onclick="sendCommand('resume')">Resume</button>
                     <button onclick="sendCommand('force_fold')">Fold Context</button>
                 </div>

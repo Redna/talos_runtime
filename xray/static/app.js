@@ -1,4 +1,4 @@
-let ws=null,state={},events=[],commit={},containers={},thinkActive=false,autoScroll=true,prevMsgCount=0,currentAssistantEl=null;
+let ws=null,state={},events=[],commit={},containers={},thinkActive=false,autoScroll=true,prevMsgCount=0,currentAssistantEl=null,isPaused=false,callPending=false;
 const CONTAINER_KEYS=new Set(["gate","talos","ollama","llamacpp"]);
 const COLLAPSE_LINES=5;
 
@@ -11,11 +11,34 @@ function switchView(name){
   if(tab)tab.classList.add('active');
 }
 
+function updateStatusUI(){
+    const badge=document.getElementById("status-badge");
+    const dot=document.getElementById("status-dot");
+    const text=document.getElementById("status-text");
+    const pending=document.getElementById("pending-indicator");
+    const pendingText=document.getElementById("pending-text");
+    const pauseBtn=document.getElementById("pause-btn");
+    if(isPaused){
+        badge.className="status-badge status-paused";
+        dot.textContent="⏸";
+        text.textContent="Paused";
+        if(pauseBtn){pauseBtn.textContent="Resume";pauseBtn.className="btn btn-resume";pauseBtn.onclick=()=>sendCommand("resume")}
+        if(callPending){pending.classList.remove("hidden");pendingText.textContent="Waiting on LLM..."}else{pending.classList.remove("hidden");pendingText.textContent="No active call"}
+    }else{
+        badge.className="status-badge status-running";
+        dot.textContent="●";
+        text.textContent="Running";
+        if(pauseBtn){pauseBtn.textContent="Pause";pauseBtn.className="btn btn-pause";pauseBtn.onclick=()=>sendCommand("pause")}
+        pending.classList.add("hidden");
+    }
+}
+
 document.addEventListener('DOMContentLoaded',()=>{
   document.querySelectorAll('.tab').forEach(tab=>{
     tab.addEventListener('click',()=>switchView(tab.dataset.view));
   });
   setupScrollPause();
+  updateStatusUI();
   connect();
 });
 
@@ -30,8 +53,8 @@ function connect(){
 function handleMessage(msg){
   switch(msg.type){
     case"full_snapshot":state=msg.state||{};events=msg.events||[];commit=msg.commit||{};containers=msg.container_status||{};renderAll();break;
-    case"state_update":state={...state,...msg};renderState();renderHealth();break;
-    case"state":state={...state,...msg};renderState();break;
+    case"state_update":state={...state,...msg};if(msg.is_paused!==undefined||msg.call_pending!==undefined){isPaused=msg.is_paused||false;callPending=msg.call_pending||false;updateStatusUI()}renderState();renderHealth();break;
+    case"state":state={...state,...msg};if(msg.is_paused!==undefined||msg.call_pending!==undefined){isPaused=msg.is_paused||false;callPending=msg.call_pending||false;updateStatusUI()}renderState();break;
     case"trajectory":renderTrajectory(msg.messages,msg.model,msg.total_count,msg.showing_count);break;
     case"stream_token":appendLiveToken(msg.content,msg.model);break;
     case"tool_call":appendLiveToolCall(msg.name,msg.arguments);break;
