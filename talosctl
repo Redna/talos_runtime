@@ -19,6 +19,7 @@ MEMORY_DIR = RUNTIME_DIR / "memory"
 RUN_DIR = Path("/tmp/talos-runtime")
 PID_FILE = RUN_DIR / "watchdog.pid"
 LOG_FILE = RUN_DIR / "watchdog.log"
+HEALTH_FILE = RUN_DIR / "watchdog.health"
 
 CRASH_LOG_PATH = MEMORY_DIR / "last_crash.log"
 STATS_FILE = MEMORY_DIR / ".runtime_stats.json"
@@ -152,35 +153,86 @@ def capture_crash_log():
     if result.stdout:
         CRASH_LOG_PATH.write_text(result.stdout, encoding="utf-8")
 
-def get_compose_args():
-    full_rocm = RUNTIME_DIR / "docker-compose.rocm.full.yml"
-    if full_rocm.exists() and Path("/dev/kfd").exists(): return f"-f {full_rocm.name}"
-    base_compose = "-f docker-compose.yml"
-    if Path("/dev/kfd").exists(): return f"{base_compose} -f docker-compose.rocm.yml"
-    return f"{base_compose} -f docker-compose.cuda.yml"
+import re
 
-def wait_for_spine_healthy(timeout=600):
-    """Wait for the Spine to report healthy, falling back to Gate health check."""
+def load_env(path: Path) -> dict:
+    env = {}
+    if not path.exists():
+        return env
+    for line in path.read_text().splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if "=" in line:
+            key, _, value = line.partition("=")
+            env[key.strip()] = value.strip().strip('"').strip("'")
+    return env
+
+def model_to_slug(filename: str) -> str:
+    name = filename.replace(".gguf", "")
+    for prefix in ["-UD-", "-Q"]:
+        idx = name.find(prefix)
+        if idx > 0:
+            name = name[:idx]
+            break
+    return name.lower().replace(".", "-")
+
+def _model_overlay_arg(quiet=False) -> str:
+    env = load_env(RUNTIME_DIR / ".env")
+    model = env.get("DEFAULT_MODEL", "")
+    if not model:
+        return ""
+    slug = model_to_slug(model)
+    path = RUNTIME_DIR / f"docker-compose.model.{slug}.yml"
+    if path.exists():
+        if not quiet:
+            print(f"[talosctl] Model overlay: {path.name} (from DEFAULT_MODEL={model})")
+        return f"-f {path.name}"
+    if not quiet:
+        print(f"[talosctl] No model overlay for '{model}' (slug: {slug}), using base defaults")
+    return ""
+
+_compose_args_cache = None
+
+def get_compose_args(cached=False):
+    global _compose_args_cache
+    if cached and _compose_args_cache:
+        return _compose_args_cache
+    parts = ["-f docker-compose.yml"]
+    if Path("/dev/kfd").exists():
+        parts.append("-f docker-compose.gpu.rocm.yml")
+    else:
+        parts.append("-f docker-compose.gpu.cuda.yml")
+    model_arg = _model_overlay_arg(quiet=cached)
+    if model_arg:
+        parts.append(model_arg)
+    result = " ".join(parts)
+    _compose_args_cache = result
+    return result
+
+def wait_for_gate_healthy(timeout=120):
+    """Wait for the Gate container to become healthy via Docker health check."""
+    start = time.time()
+    while time.time() - start < timeout:
+        res = subprocess.run("docker inspect --format='{{.State.Health.Status}}' talos_gate", shell=True, capture_output=True, text=True)
+        status = res.stdout.strip() if res.stdout else ""
+        if status == "healthy":
+            return True
+        time.sleep(3)
+    return False
+
+def wait_for_spine_healthy(timeout=300):
+    """Wait for the Spine to report healthy at port 4001."""
     start = time.time()
     while time.time() - start < timeout:
         try:
-            resp = urllib.request.urlopen('http://localhost:4001/health')
+            resp = urllib.request.urlopen('http://localhost:4001/health', timeout=5)
             data = json.loads(resp.read())
             if data.get('status') in ('healthy', 'degraded'):
                 return True
         except:
             pass
         time.sleep(5)
-    # Fallback to Gate health check if Spine is unreachable
-    compose_args = get_compose_args()
-    start_wait = time.time()
-    while time.time() - start_wait < 60:
-        res = subprocess.run("docker inspect --format='{{.State.Health.Status}}' talos_gate", shell=True, capture_output=True, text=True)
-        status = res.stdout.strip() if res.stdout else "unknown"
-        if status == "healthy": return True
-        if status == "unhealthy":
-            subprocess.run(f"docker compose {compose_args} restart gate", shell=True, cwd=RUNTIME_DIR)
-        time.sleep(10)
     return False
 
 def spine_restart(reason="Crash detected"):
@@ -215,20 +267,108 @@ def cleanup(signum, frame):
     if daemon_process: daemon_process.terminate()
     subprocess.run(f"docker compose {get_compose_args()} down", shell=True, cwd=RUNTIME_DIR)
     if PID_FILE.exists(): PID_FILE.unlink()
+    if HEALTH_FILE.exists(): HEALTH_FILE.unlink()
     sys.exit(0)
+
+MAX_INFRA_RETRIES = 3
+MAX_COMPOSE_FAILURES = 5
+
+def check_ollama_healthy():
+    try:
+        resp = urllib.request.urlopen('http://localhost:11434/api/tags', timeout=3)
+        return resp.status == 200
+    except Exception:
+        return False
+
+def ollama_pull_model(model_name):
+    try:
+        result = subprocess.run(
+            ["ollama", "pull", model_name],
+            capture_output=True, text=True, timeout=300
+        )
+        return result.returncode == 0
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return False
+
+def ollama_has_model(model_name):
+    try:
+        result = subprocess.run(
+            ["ollama", "list"],
+            capture_output=True, text=True, timeout=5
+        )
+        return model_name in result.stdout
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return False
 
 def run_daemon():
     signal.signal(signal.SIGINT, cleanup)
     signal.signal(signal.SIGTERM, cleanup)
-    compose_args = get_compose_args()
-    subprocess.run(f"docker compose {compose_args} up -d llamacpp", shell=True, cwd=RUNTIME_DIR)
+    compose_args = get_compose_args(cached=True)
+    compose_failures = 0
 
+    for d in [MEMORY_DIR, RUNTIME_DIR / "models"]:
+        if not d.exists():
+            d.mkdir(parents=True, exist_ok=True)
+
+    env = load_env(RUNTIME_DIR / ".env")
+    model = env.get("DEFAULT_MODEL", "")
+    needs_llamacpp = model.endswith(".gguf")
+
+    if needs_llamacpp:
+        res = subprocess.run(f"docker compose {compose_args} up -d llamacpp", shell=True, cwd=RUNTIME_DIR, capture_output=True, text=True)
+        if res.returncode != 0 and "already in use" in res.stderr:
+            print("[DAEMON] Removing stale containers...", flush=True)
+            subprocess.run(f"docker compose {compose_args} down", shell=True, cwd=RUNTIME_DIR, capture_output=True)
+            res = subprocess.run(f"docker compose {compose_args} up -d llamacpp", shell=True, cwd=RUNTIME_DIR, capture_output=True, text=True)
+        if res.returncode != 0:
+            print(f"\033[91m[DAEMON] FATAL: docker compose up llamacpp failed:\033[0m", flush=True)
+            print(res.stderr.strip(), flush=True)
+            HEALTH_FILE.write_text(json.dumps({"status": "failed", "error": "llamacpp startup failed", "ts": time.time()}))
+            if PID_FILE.exists(): PID_FILE.unlink()
+            sys.exit(1)
+    else:
+        print("[DAEMON] No .gguf model configured, skipping llamacpp.", flush=True)
+
+    print("[DAEMON] Starting Gate...", flush=True)
+    res = subprocess.run(f"docker compose {compose_args} up -d gate", shell=True, cwd=RUNTIME_DIR, capture_output=True, text=True)
+    if res.returncode != 0:
+        print(f"\033[91m[DAEMON] FATAL: docker compose up gate failed:\033[0m", flush=True)
+        print(res.stderr.strip(), flush=True)
+        HEALTH_FILE.write_text(json.dumps({"status": "failed", "error": "gate startup failed", "ts": time.time()}))
+        if PID_FILE.exists(): PID_FILE.unlink()
+        sys.exit(1)
+
+    print("[DAEMON] Starting X-ray...", flush=True)
+    res = subprocess.run(f"docker compose {compose_args} up -d xray", shell=True, cwd=RUNTIME_DIR, capture_output=True, text=True)
+    if res.returncode != 0:
+        print(f"[DAEMON] WARNING: X-ray startup failed: {res.stderr.strip()}", flush=True)
+
+    talos_model = env.get("TALOS_MODEL", "")
+    if ":" in talos_model:
+        if not check_ollama_healthy():
+            print("[DAEMON] WARNING: Ollama not reachable at localhost:11434", flush=True)
+        elif not ollama_has_model(talos_model):
+            print(f"[DAEMON] Pulling Ollama model: {talos_model}...", flush=True)
+            ollama_pull_model(talos_model)
+
+    HEALTH_FILE.write_text(json.dumps({"status": "running", "phase": "waiting_infra", "ts": time.time()}))
+
+    healthy_retries = 0
     while True:
-        if not wait_for_spine_healthy():
+        if not wait_for_gate_healthy():
+            healthy_retries += 1
+            if healthy_retries >= MAX_INFRA_RETRIES:
+                print(f"\033[91m[DAEMON] FATAL: Gate unreachable after {MAX_INFRA_RETRIES} attempts.\033[0m", flush=True)
+                HEALTH_FILE.write_text(json.dumps({"status": "failed", "error": "gate unreachable", "ts": time.time()}))
+                if PID_FILE.exists(): PID_FILE.unlink()
+                sys.exit(1)
+            HEALTH_FILE.write_text(json.dumps({"status": "running", "phase": "waiting_infra", "retries": healthy_retries, "ts": time.time()}))
             time.sleep(30); continue
+        healthy_retries = 0
 
         start_time = time.time()
         print(f"\n[DAEMON] Starting Talos Agent...", flush=True)
+        HEALTH_FILE.write_text(json.dumps({"status": "running", "phase": "agent_running", "ts": time.time()}))
 
         cmd = f"docker compose {compose_args} up --build talos"
         process = subprocess.Popen(cmd, shell=True, cwd=RUNTIME_DIR)
@@ -247,12 +387,21 @@ def run_daemon():
             time.sleep(30)
 
         if exit_code is not None and exit_code != 0:
+            compose_failures += 1
+            if compose_failures >= MAX_COMPOSE_FAILURES:
+                print(f"\033[91m[DAEMON] FATAL: {MAX_COMPOSE_FAILURES} consecutive agent failures. Exiting.\033[0m", flush=True)
+                HEALTH_FILE.write_text(json.dumps({"status": "failed", "error": f"{MAX_COMPOSE_FAILURES} consecutive failures", "ts": time.time()}))
+                if PID_FILE.exists(): PID_FILE.unlink()
+                sys.exit(1)
             spine_healthy = check_spine_healthy()
             if not spine_healthy:
                 trigger_lazarus_reset(reason="Spine crash", mode="spine")
             else:
                 trigger_lazarus_reset(reason=f"Fatal Exit (Code {exit_code})", mode="cortex")
+        else:
+            compose_failures = 0
 
+        HEALTH_FILE.write_text(json.dumps({"status": "running", "phase": "restarting", "consecutive_failures": compose_failures, "ts": time.time()}))
         time.sleep(5)
 
 def start():
@@ -268,6 +417,20 @@ def start():
     log_f = open(LOG_FILE, "a", encoding="utf-8")
     proc = subprocess.Popen([sys.executable, "-u", __file__, "daemon"], stdout=log_f, stderr=subprocess.STDOUT, cwd=str(RUNTIME_DIR), start_new_session=True)
     PID_FILE.write_text(str(proc.pid))
+
+    for _ in range(30):
+        time.sleep(0.5)
+        if HEALTH_FILE.exists():
+            try:
+                health = json.loads(HEALTH_FILE.read_text())
+                if health.get("status") == "failed":
+                    error = health.get("error", "unknown")
+                    print(f"\033[91mWatchdog failed to start: {error}\033[0m")
+                    return
+                if health.get("status") == "running":
+                    break
+            except: pass
+
     print(f"Watchdog started (PID: {proc.pid}).")
 
 def stop():
@@ -278,10 +441,168 @@ def stop():
     os.kill(pid, signal.SIGTERM)
     time.sleep(5)
 
+def logs():
+    compose_args = get_compose_args()
+    cmd = f"docker compose {compose_args} logs -f talos"
+    subprocess.run(cmd, shell=True, cwd=str(RUNTIME_DIR))
+
+def monitor():
+    while True:
+        _draw_dashboard()
+        try:
+            time.sleep(5)
+        except KeyboardInterrupt:
+            break
+
+def _draw_dashboard():
+    print("\033[2J\033[H", end="")
+
+    compose_args = get_compose_args(cached=True)
+    env = load_env(RUNTIME_DIR / ".env")
+    model = env.get("DEFAULT_MODEL", "unknown")
+
+    now = time.strftime("%H:%M:%S")
+
+    print(f"\033[1m  TALOS MONITOR  {now}\033[0m")
+    print(f"  Model: {model}")
+    print()
+
+    print("\033[1m  CONTAINERS\033[0m")
+    container_data = _container_status(compose_args)
+    for name, status, health in container_data:
+        icon = {"running": "\033[32m●\033[0m", "exited": "\033[31m●\033[0m"}.get(status, "\033[33m●\033[0m")
+        h = f" ({health})" if health else ""
+        print(f"  {icon} {name:16s} {status}{h}")
+    print()
+
+    print("\033[1m  SPINE (localhost:4001)\033[0m")
+    spine = _spine_info()
+    if spine:
+        ctx_bar = _bar(spine.get("context_pct", 0) / 100, 20)
+        print(f"  Context: {ctx_bar} {spine.get('context_pct', 0):.0f}%")
+        print(f"  Turn: {spine.get('turn', 0)}   Tokens: {spine.get('tokens_used', 0)}   Messages: {spine.get('message_count', 0)}   Notices: {spine.get('queued_notices', 0)}")
+        focus = spine.get("current_focus", "")
+        if focus:
+            print(f"  Focus: {focus[:60]}")
+    else:
+        print("  \033[33mUnreachable\033[0m")
+    print()
+
+    print("\033[1m  VERSION TRACKING\033[0m")
+    for label, path in [("Candidate", Path("/spine/last_candidate_commit")), ("Stable", Path("/spine/last_stable_commit"))]:
+        if path.exists():
+            sha = path.read_text().strip()[:8]
+            print(f"  {label}: {sha}")
+        else:
+            print(f"  {label}: —")
+    print()
+
+    stats = load_runtime_stats()
+    print("\033[1m  LAZARUS\033[0m")
+    print(f"  Consecutive failures: {stats.get('consecutive_failures', 0)}   Last task: {stats.get('last_task_id', '—')}")
+    print()
+
+    wd_status, wd_health = _watchdog_status()
+    if wd_status == "running":
+        phase = wd_health.get("phase", "") if wd_health else ""
+        pid = int(PID_FILE.read_text()) if PID_FILE.exists() else "?"
+        print(f"  Watchdog: \033[32mrunning\033[0m (PID: {pid}){f' — {phase}' if phase else ''}")
+    elif wd_status == "failed":
+        error = wd_health.get("error", "unknown") if wd_health else "unknown"
+        print(f"  Watchdog: \033[31mfailed\033[0m — {error}")
+    elif wd_status == "stale":
+        print("  Watchdog: \033[33mstale\033[0m (no health update in 2+ minutes)")
+    else:
+        print("  Watchdog: \033[33mnot running\033[0m")
+
+    print("\n  \033[2mCtrl+C to exit\033[0m")
+
+def _container_status(compose_args):
+    result = subprocess.run(
+        f"docker compose {compose_args} ps --format json",
+        shell=True, cwd=str(RUNTIME_DIR), capture_output=True, text=True
+    )
+    rows = []
+    for line in result.stdout.strip().splitlines():
+        try:
+            c = json.loads(line)
+            rows.append((c.get("Name", "?"), c.get("State", "?"), c.get("Health", "")))
+        except:
+            pass
+    if not rows:
+        res = subprocess.run(
+            f"docker compose {compose_args} ps",
+            shell=True, cwd=str(RUNTIME_DIR), capture_output=True, text=True
+        )
+        for line in res.stdout.strip().splitlines()[1:]:
+            parts = line.split()
+            if len(parts) >= 3:
+                rows.append((parts[0], parts[2], ""))
+    return rows
+
+def _spine_info():
+    try:
+        resp = urllib.request.urlopen('http://localhost:4001/state', timeout=3)
+        return json.loads(resp.read())
+    except:
+        return None
+
+def _bar(pct, width):
+    filled = int(pct * width)
+    filled = max(0, min(width, filled))
+    if pct < 0.5:
+        color = "\033[32m"
+    elif pct < 0.85:
+        color = "\033[33m"
+    else:
+        color = "\033[31m"
+    return f"{color}{'█' * filled}{'░' * (width - filled)}\033[0m"
+
+def _watchdog_status():
+    if not PID_FILE.exists():
+        return "not_running", None
+    pid = int(PID_FILE.read_text())
+    try:
+        os.kill(pid, 0)
+    except:
+        return "not_running", None
+    if not HEALTH_FILE.exists():
+        return "running", None
+    try:
+        health = json.loads(HEALTH_FILE.read_text())
+        age = time.time() - health.get("ts", 0)
+        if age > 120:
+            return "stale", health
+        return health.get("status", "running"), health
+    except:
+        return "running", None
+
+def status():
+    compose_args = get_compose_args(cached=True)
+    container_data = _container_status(compose_args)
+    for name, s, health in container_data:
+        h = f" ({health})" if health else ""
+        print(f"  {name}: {s}{h}")
+    wd_status, wd_health = _watchdog_status()
+    if wd_status == "running":
+        phase = wd_health.get("phase", "") if wd_health else ""
+        pid = int(PID_FILE.read_text()) if PID_FILE.exists() else "?"
+        print(f"Watchdog: \033[32mrunning\033[0m (PID: {pid}){f' — {phase}' if phase else ''}")
+    elif wd_status == "failed":
+        error = wd_health.get("error", "unknown") if wd_health else "unknown"
+        print(f"Watchdog: \033[31mfailed\033[0m — {error}")
+    elif wd_status == "stale":
+        print("Watchdog: \033[33mstale\033[0m (no health update in 2+ minutes)")
+    else:
+        print("Watchdog: not running")
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("command", choices=["start", "stop", "daemon"])
+    parser.add_argument("command", choices=["start", "stop", "logs", "monitor", "status", "daemon"])
     args = parser.parse_args()
     if args.command == "start": start()
     elif args.command == "stop": stop()
+    elif args.command == "logs": logs()
+    elif args.command == "monitor": monitor()
+    elif args.command == "status": status()
     elif args.command == "daemon": run_daemon()

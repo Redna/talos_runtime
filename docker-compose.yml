@@ -6,6 +6,8 @@ services:
     container_name: talos_agent
     security_opt:
       - seccomp=unconfined
+    ports:
+      - "4001:4001"
     env_file: .env
     environment:
       - TALOS_REPO_DIR=/app
@@ -18,10 +20,14 @@ services:
       - SPINE_SOCKET=/tmp/spine.sock
       - GITHUB_TOKEN=${GITHUB_TOKEN:-}
       - GITHUB_SSH_KEY=${GITHUB_SSH_KEY:-}
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN:-}
+      - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID:-0}
     volumes:
       - ./memory:/memory
       - spine_observability:/spine
-      - talos_workspace:/app
+      - app_data:/app
+      - ./.git/modules/talos:/runtime_git
+      - ./spine_config.json:/spine/spine_config.json:ro
     networks:
       - talos_net
     depends_on:
@@ -33,6 +39,8 @@ services:
       context: ./gate
       dockerfile: Dockerfile
     container_name: talos_gate
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     ports:
       - "4000:4000"
     volumes:
@@ -40,32 +48,45 @@ services:
       - ./llm_logs:/runtime_logs:rw
     environment:
       - TOGETHERAI_API_KEY=${TOGETHERAI_API_KEY:-}
+      - OLLAMA_HOST=${OLLAMA_HOST:-host.docker.internal:11434}
       - MEMORY_DIR=/memory
       - RUNTIME_LOG_DIR=/runtime_logs
       - DAILY_BUDGET_LIMIT=${DAILY_BUDGET_LIMIT:-5.00}
       - TALOS_CONTEXT_WINDOW=${TALOS_CONTEXT_WINDOW:-71680}
     healthcheck:
-      test: ["CMD", "python3", "-c", "import urllib.request, json; resp = urllib.request.urlopen('http://localhost:4000/health').read(); data = json.loads(resp); exit(0 if data.get('status') == 'healthy' else 1)"]
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:4000/healthz')"]
       interval: 10s
       timeout: 5s
       retries: 20
       start_period: 10s
-    restart: unless-stopped
+    networks:
+      - talos_net
+
+  xray:
+    build:
+      context: ./xray
+      dockerfile: Dockerfile
+    container_name: talos_xray
+    ports:
+      - "4040:4040"
+    environment:
+      - GATE_URL=http://gate:4000
+      - SPINE_URL=http://talos_agent:4001
+      - OLLAMA_HOST=${OLLAMA_HOST:-host.docker.internal:11434}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ./xray_data:/data
+    depends_on:
+      gate:
+        condition: service_healthy
     networks:
       - talos_net
 
   llamacpp:
     image: ${LLAMACPP_IMAGE:-ghcr.io/ggml-org/llama.cpp:server-rocm}
     container_name: llamacpp
-    restart: unless-stopped
-    privileged: true
     shm_size: 16G
-    devices:
-      - /dev/kfd:/dev/kfd
-      - /dev/dri:/dev/dri
-    group_add:
-      - video
-      - render
     cap_add:
       - SYS_PTRACE
     security_opt:
@@ -75,8 +96,6 @@ services:
       - ./models:/models
     ports:
       - "8000:8080"
-    environment:
-      - HSA_ENABLE_SDMA=0
     command:
       - -m
       - /models/${DEFAULT_MODEL}
@@ -91,24 +110,12 @@ services:
       - --no-warmup
       - --flash-attn
       - "on"
-      - --cache-type-k
-      - "q4_0"
-      - --cache-type-v
-      - "q4_0"
-      - -b
-      - "1024"
-      - -ub
-      - "512"
-      - -np
-      - "1"
       - --temp
       - "1.0"
       - --top-p
       - "0.95"
       - --top-k
       - "64"
-      - --reasoning
-      - "on"
     networks:
       - talos_net
 
@@ -117,5 +124,5 @@ networks:
     driver: bridge
 
 volumes:
-  talos_workspace:
+  app_data:
   spine_observability:

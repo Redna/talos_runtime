@@ -41,13 +41,21 @@ This launches the watchdog daemon, which:
 ./talosctl stop
 ```
 
-### 4. View logs
+### 4. Monitor the agent
 
 ```bash
-docker compose logs -f talos
+./talosctl monitor
 ```
 
-### 5. Run without the watchdog
+Live dashboard showing container health, Spine state (turn, context %, tokens), version tracking, and Lazarus status. Refreshes every 5 seconds. Ctrl+C to exit.
+
+### 5. View logs
+
+```bash
+./talosctl logs
+```
+
+### 6. Run without the watchdog
 
 ```bash
 docker compose up --build
@@ -70,7 +78,7 @@ talos_runtime/                  ← This repo (infrastructure)
     setup_hooks.sh              ← Pre-commit hook installer
     constitutional_auditor.py   ← Zero-temperature audit gate
   talos/                        ← Git submodule → talos agent repo
-  talosctl                      ← Watchdog daemon
+  talosctl                      ← Watchdog daemon (start/stop/monitor/logs/status)
   tests/                        ← Integration tests
 
 talos/                          ← Agent repo (submodule, separate git repo)
@@ -106,19 +114,33 @@ See [ARCHITECTURE.md](docs/docs/ARCHITECTURE.md) for the full technical specific
 
 ## Docker Compose Overlays
 
+Compose files are layered: **base** + **GPU** + **model**. `talosctl` auto-selects based on your `.env` and hardware.
+
+### GPU Overlays (auto-detected)
+
 | File | Purpose |
 |---|---|
-| `docker-compose.yml` | Base stack (talos + gate + llamacpp) |
-| `docker-compose.rocm.yml` | AMD ROCm GPU |
-| `docker-compose.cuda.yml` | NVIDIA CUDA GPU |
-| `docker-compose.gemma.yml` | Gemma vision model (ROCm) |
-| `docker-compose.rocm.qwen.yml` | Qwen model (ROCm) |
-| `docker-compose.rocm.full.yml` | Full ROCm stack |
+| `docker-compose.gpu.rocm.yml` | AMD ROCm (devices, image, HSA config) |
+| `docker-compose.gpu.cuda.yml` | NVIDIA CUDA (image, NVIDIA env) |
 
-Select via `COMPOSE_FILE` in `.env`:
-```
-COMPOSE_FILE=docker-compose.yml:docker-compose.rocm.yml
-```
+Selected automatically: ROCm if `/dev/kfd` exists, CUDA otherwise.
+
+### Model Overlays (auto-selected from `DEFAULT_MODEL`)
+
+| File | Model | Key params |
+|---|---|---|
+| `docker-compose.model.gemma-4-31b-it.yml` | `gemma-4-31B-it-UD-Q4_K_XL.gguf` | 65536 ctx, q4_0 cache, reasoning on |
+| `docker-compose.model.gemma-4-26b-a4b-it.yml` | `gemma-4-26B-A4B-it-UD-Q4_K_XL.gguf` | 40960 ctx, q8_0 cache, mmproj, thinking |
+| `docker-compose.model.qwen3-5-27b.yml` | `Qwen3.5-27B-Q4_K_M.gguf` | 71680 ctx, q4_0 cache |
+
+Auto-selected by convention: `gemma-4-31B-it-UD-Q4_K_XL.gguf` → `model.gemma-4-31b.yml`. If no matching overlay exists, the base `docker-compose.yml` uses `${DEFAULT_MODEL}` with generic defaults.
+
+### Adding a new model
+
+1. Create `docker-compose.model.<slug>.yml` with `services.llamacpp.command` + `healthcheck`
+2. Set `DEFAULT_MODEL=<filename>.gguf` in `.env`
+
+Slug convention: strip `.gguf`, strip quant suffix (everything from `-UD-` or `-Q` onward), lowercase, dots → hyphens.
 
 ## Volumes
 

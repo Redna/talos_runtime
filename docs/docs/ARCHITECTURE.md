@@ -347,15 +347,20 @@ talos container (two processes):
         spine_client.py → IPC via /tmp/spine.sock
 ```
 
-### GPU Overlay Files
+### Compose Overlay Files
 
-- `docker-compose.rocm.yml` — AMD ROCm
-- `docker-compose.cuda.yml` — NVIDIA CUDA
-- `docker-compose.gemma.yml` — Gemma vision model (ROCm)
-- `docker-compose.rocm.qwen.yml` — Qwen model (ROCm)
-- `docker-compose.rocm.full.yml` — Full stack with gate + agent (ROCm)
+Compose is layered: **base** + **GPU** + **model**. `talosctl` auto-selects based on hardware and `DEFAULT_MODEL` in `.env`.
 
-Select via `COMPOSE_FILE` in `.env`.
+**GPU overlays** (auto-detected from `/dev/kfd`):
+- `docker-compose.gpu.rocm.yml` — AMD ROCm (devices, image, HSA config)
+- `docker-compose.gpu.cuda.yml` — NVIDIA CUDA (image, NVIDIA env)
+
+**Model overlays** (auto-selected from `DEFAULT_MODEL` by naming convention):
+- `docker-compose.model.gemma-4-31b-it.yml` — Gemma 4 31B (65536 ctx, q4_0, reasoning)
+- `docker-compose.model.gemma-4-26b-a4b-it.yml` — Gemma 4 26B A4B vision (40960 ctx, q8_0, mmproj)
+- `docker-compose.model.qwen3-5-27b.yml` — Qwen 3.5 27B (71680 ctx, q4_0)
+
+Slug convention: strip `.gguf`, strip quant suffix (`-UD-...` or `-Q...`), lowercase, dots → hyphens. If no matching file exists, base defaults are used.
 
 ---
 
