@@ -237,7 +237,7 @@ async def chat_completions(request: Request, background_tasks: BackgroundTasks):
             else:
                 msg["content"] = content
         else:
-            msg["content"] = content
+            msg["content"] = content if content else ""
         if "tool_calls" in m:
             msg["tool_calls"] = m["tool_calls"]
         if "tool_call_id" in m:
@@ -304,10 +304,14 @@ async def chat_completions(request: Request, background_tasks: BackgroundTasks):
         async def stream_proxy() -> AsyncGenerator[bytes, None]:
             _xray_broadcast({"type": "think_start", "model": model, "ts": time.time()})
             try:
+                for m in body.get("messages", []):
+                    if m.get("content") is None:
+                        m["content"] = ""
                 async with httpx.AsyncClient(timeout=1800.0) as client:
                     async with client.stream(
                         "POST", url, json=body, headers=headers
                     ) as resp:
+                        print(f"[Gate] Ollama response status: {resp.status_code}")
                         resp.raise_for_status()
                         async for line in resp.aiter_lines():
                             if not line.startswith("data: "):
@@ -396,8 +400,15 @@ async def chat_completions(request: Request, background_tasks: BackgroundTasks):
     else:
         try:
             _xray_broadcast({"type": "think_start", "model": model, "ts": time.time()})
+            for m in body.get("messages", []):
+                if m.get("content") is None:
+                    m["content"] = ""
             async with httpx.AsyncClient(timeout=1800.0) as client:
+                print(f"[Gate] NON-STREAM POSTing to {url}")
                 resp = await client.post(url, json=body, headers=headers)
+                print(
+                    f"[Gate] NON-STREAM Ollama response: {resp.status_code} body: {resp.text[:200]}"
+                )
                 resp.raise_for_status()
 
                 resp_json = resp.json()
