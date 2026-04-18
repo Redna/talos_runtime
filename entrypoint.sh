@@ -15,14 +15,19 @@ GIT_BRANCH=feat/talos
 
 cd /app
 
-echo "[Entrypoint] Fetching latest from $GIT_REMOTE/$GIT_BRANCH..."
-git fetch "$GIT_REMOTE" "$GIT_BRANCH"
-git checkout "$GIT_BRANCH"
-git reset --hard "$GIT_REMOTE/$GIT_BRANCH"
-
-if [ -n "$(git status --porcelain)" ]; then
-    echo "[Entrypoint] Reverting uncommitted changes..."
-    git checkout -- .
+if git ls-remote --exit-code "$GIT_REMOTE" "$GIT_BRANCH" > /dev/null 2>&1; then
+    echo "[Entrypoint] Branch $GIT_BRANCH exists on $GIT_REMOTE, pulling latest..."
+    git fetch "$GIT_REMOTE" "$GIT_BRANCH"
+    git checkout "$GIT_BRANCH"
+    git reset --hard "$GIT_REMOTE/$GIT_BRANCH"
+    if [ -n "$(git status --porcelain)" ]; then
+        echo "[Entrypoint] Reverting uncommitted changes..."
+        git checkout -- .
+    fi
+else
+    echo "[Entrypoint] Branch $GIT_BRANCH does not exist on $GIT_REMOTE, creating..."
+    git checkout -b "$GIT_BRANCH"
+    git push -u "$GIT_REMOTE" "$GIT_BRANCH" || echo "[Entrypoint] Warning: failed to push $GIT_BRANCH, will retry on next startup"
 fi
 
 echo "[Entrypoint] Current branch: $(git rev-parse --abbrev-ref HEAD)"
