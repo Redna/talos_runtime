@@ -3,6 +3,7 @@ import json
 import time
 import asyncio
 from pathlib import Path
+from datetime import datetime, timezone
 from typing import Dict, Any, List, Optional, AsyncGenerator
 import httpx
 from fastapi import (
@@ -15,7 +16,7 @@ from fastapi import (
     UploadFile,
     Form,
 )
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from dotenv import load_dotenv
 
 # Talos Gate - v1.1
@@ -35,6 +36,7 @@ AUDIO_API_URL = os.getenv(
 )
 AUDIO_API_KEY = os.getenv("AUDIO_API_KEY", TOGETHERAI_API_KEY)
 OLLAMA_HOST = os.getenv("OLLAMA_HOST", "host.docker.internal:11434")
+DATA_DIR = Path(os.getenv("DATA_DIR", "/data"))
 
 # State
 PRICING_CACHE: Dict[str, Dict[str, float]] = {}
@@ -49,6 +51,57 @@ def _xray_broadcast(event: dict):
         q.put_nowait(event)
 
 
+class MessageTraceWriter:
+    def __init__(self, data_dir: Path):
+        self.data_dir = Path(data_dir) / "messages"
+        self._last_written_count = 0
+        self._trace_turn = 0
+        self._current_date = ""
+        self._file = None
+
+    def _ensure_file(self):
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        if today != self._current_date:
+            if self._file:
+                self._file.close()
+            self.data_dir.mkdir(parents=True, exist_ok=True)
+            self._file = open(self.data_dir / f"{today}.jsonl", "a", encoding="utf-8")
+            self._current_date = today
+
+    def write_messages(
+        self,
+        request_messages: list[dict],
+        response_message: dict,
+        turn: int | None = None,
+    ):
+        self._ensure_file()
+        ts = datetime.now(timezone.utc).isoformat()
+        if turn is not None:
+            self._trace_turn = turn
+        else:
+            self._trace_turn += 1
+            turn = self._trace_turn
+
+        for msg in request_messages[self._last_written_count :]:
+            line = {**msg, "_ts": ts, "_turn": turn}
+            self._file.write(json.dumps(line, default=str) + "\n")
+
+        self._last_written_count = len(request_messages)
+
+        resp_line = {**response_message, "_ts": ts, "_turn": turn}
+        self._file.write(json.dumps(resp_line, default=str) + "\n")
+        self._file.flush()
+
+    def close(self):
+        if self._file:
+            self._file.close()
+            self._file = None
+            self._current_date = ""
+
+
+_trace_writer = MessageTraceWriter(DATA_DIR)
+
+
 # Routing configuration
 BACKENDS = {
     "local": "http://llamacpp:8080/v1/chat/completions",
@@ -57,6 +110,9 @@ BACKENDS = {
     "together_images": "https://api.together.xyz/v1/images/generations",
     "together_audio": "https://api.together.xyz/v1/audio/transcriptions",
 }
+
+
+THINKING_MODELS: set[str] = set()
 
 
 # Model name remapping for backends that need different model names
@@ -70,6 +126,31 @@ MODEL_MAP = {
 MODEL_REMAP = {
     "talos": "gemma4:31b-cloud",
 }
+
+
+async def _detect_thinking_models():
+    global THINKING_MODELS
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            r = await client.get(f"http://{OLLAMA_HOST}/api/tags")
+            if r.status_code == 200:
+                for m in r.json().get("models", []):
+                    name = m.get("name", "")
+                    try:
+                        sr = await client.post(
+                            f"http://{OLLAMA_HOST}/api/show",
+                            json={"name": name},
+                            timeout=10.0,
+                        )
+                        if sr.status_code == 200:
+                            caps = sr.json().get("capabilities", [])
+                            if "thinking" in caps:
+                                THINKING_MODELS.add(name)
+                    except Exception:
+                        pass
+        print(f"[Talos Gate] Thinking-capable models: {THINKING_MODELS}")
+    except Exception as e:
+        print(f"[Talos Gate] Could not detect thinking models: {e}")
 
 
 async def refresh_pricing():
@@ -198,6 +279,12 @@ def log_completion(
         print(f"[Talos Gate] Error logging to memory: {e}")
 
 
+@app.on_event("startup")
+async def startup_event():
+    await refresh_pricing()
+    await _detect_thinking_models()
+
+
 @app.post("/v1/chat/completions")
 async def chat_completions(request: Request, background_tasks: BackgroundTasks):
     body = await request.json()
@@ -212,48 +299,6 @@ async def chat_completions(request: Request, background_tasks: BackgroundTasks):
 
     if model in MODEL_REMAP:
         body["model"] = MODEL_REMAP[model]
-
-    # Broadcast trajectory: send only recent messages to stay under WebSocket limits
-    MAX_TRAJECTORY_MESSAGES = 50
-    MAX_CONTENT_CHARS = 500
-    MAX_SYSTEM_CHARS = 500
-
-    raw_messages = body.get("messages", [])
-    total_count = len(raw_messages)
-    # Take last N messages to avoid exceeding WebSocket frame size
-    recent = (
-        raw_messages[-MAX_TRAJECTORY_MESSAGES:]
-        if total_count > MAX_TRAJECTORY_MESSAGES
-        else raw_messages
-    )
-    trajectory_messages = []
-    for m in recent:
-        msg = {"role": m.get("role", "")}
-        content = m.get("content", "")
-        if isinstance(content, str):
-            limit = MAX_SYSTEM_CHARS if m.get("role") == "system" else MAX_CONTENT_CHARS
-            if len(content) > limit:
-                msg["content"] = content[:limit] + f"... [{len(content)} chars total]"
-            else:
-                msg["content"] = content
-        else:
-            msg["content"] = content if content else ""
-        if "tool_calls" in m:
-            msg["tool_calls"] = m["tool_calls"]
-        if "tool_call_id" in m:
-            msg["tool_call_id"] = m["tool_call_id"]
-        trajectory_messages.append(msg)
-
-    _xray_broadcast(
-        {
-            "type": "trajectory",
-            "messages": trajectory_messages,
-            "total_count": total_count,
-            "showing_count": len(trajectory_messages),
-            "model": model,
-            "ts": time.time(),
-        }
-    )
 
     if backend_key == "together" and get_current_spend() >= DAILY_BUDGET_LIMIT:
         return Response(
@@ -292,8 +337,11 @@ async def chat_completions(request: Request, background_tasks: BackgroundTasks):
     if backend_key == "together" and model.startswith("together_ai/"):
         body["model"] = model.replace("together_ai/", "")
 
+    resolved_model = body.get("model", model)
     if backend_key == "ollama":
         body.setdefault("options", {})["num_ctx"] = LOCAL_CONTEXT_WINDOW
+        if resolved_model in THINKING_MODELS:
+            body["reasoning_effort"] = "high"
 
     print(
         f"[Gate] Forwarding to {backend_key}: model={body.get('model')} tool_choice={body.get('tool_choice')} tools={len(body.get('tools', []))} msgs={len(body.get('messages', []))}"
@@ -327,7 +375,17 @@ async def chat_completions(request: Request, background_tasks: BackgroundTasks):
                                     "delta", {}
                                 )
                                 content = delta.get("content", "")
+                                reasoning = delta.get("reasoning", "")
                                 tool_calls = delta.get("tool_calls")
+                                if reasoning:
+                                    _xray_broadcast(
+                                        {
+                                            "type": "thinking_token",
+                                            "content": reasoning,
+                                            "model": model,
+                                            "ts": time.time(),
+                                        }
+                                    )
                                 if content:
                                     _xray_broadcast(
                                         {
@@ -430,6 +488,21 @@ async def chat_completions(request: Request, background_tasks: BackgroundTasks):
                     tool_calls = (
                         resp_json["choices"][0].get("message", {}).get("tool_calls", [])
                     )
+                    reasoning = (
+                        resp_json["choices"][0].get("message", {}).get("reasoning", "")
+                    )
+                    if reasoning:
+                        _xray_broadcast(
+                            {
+                                "type": "thinking",
+                                "content": reasoning,
+                                "model": model,
+                                "ts": time.time(),
+                            }
+                        )
+                        resp_json["choices"][0]["message"]["content"] = (
+                            f"<thinking>\n{reasoning}\n</thinking>\n{content}"
+                        )
                     if content:
                         _xray_broadcast(
                             {
