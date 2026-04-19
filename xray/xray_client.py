@@ -32,6 +32,7 @@ class XRayClient:
         self._last_stats_write = 0.0
         self.is_paused = False
         self.call_pending = False
+        self._last_state_event: dict = {}
 
     async def start(self):
         self._running = True
@@ -62,7 +63,7 @@ class XRayClient:
         backoff = 1.0
         while self._running:
             try:
-                async with httpx.AsyncClient(timeout=1800.0) as client:
+                async with httpx.AsyncClient(timeout=60.0) as client:
                     async with client.stream(
                         "GET", f"{self.gate_url}/v1/xray/stream"
                     ) as resp:
@@ -95,7 +96,7 @@ class XRayClient:
         backoff = 1.0
         while self._running:
             try:
-                async with httpx.AsyncClient(timeout=1800.0) as client:
+                async with httpx.AsyncClient(timeout=60.0) as client:
                     async with client.stream(
                         "GET", f"{self.gate_url}/v1/xray/state"
                     ) as resp:
@@ -134,14 +135,15 @@ class XRayClient:
                                 ]
                     except Exception:
                         self._state["spine_status"] = "offline"
-                    self.on_event(
-                        {
-                            "type": "state_update",
-                            "is_paused": self.is_paused,
-                            "call_pending": self.call_pending,
-                            **self._state,
-                        }
-                    )
+                    new_event = {
+                        "type": "state_update",
+                        "is_paused": self.is_paused,
+                        "call_pending": self.call_pending,
+                        **self._state,
+                    }
+                    if new_event != self._last_state_event:
+                        self._last_state_event = new_event
+                        self.on_event(new_event)
                     backoff = 1.0
             except Exception:
                 backoff = min(backoff * 2, 30.0)

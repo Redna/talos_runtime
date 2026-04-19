@@ -99,3 +99,6 @@ body{font-family:'JetBrains Mono','Fira Code',monospace;background:var(--bg);col
 
 .btn-pause{background:#fef3c7;color:#92400e;border:1px solid #f59e0b;padding:4px 12px;border-radius:6px;cursor:pointer}
 .btn-resume{background:#d1fae5;color:#065f46;border:1px solid #10b981;padding:4px 12px;border-radius:6px;cursor:pointer}
+
+.notices-badge{background:var(--yellow);color:var(--bg);font-size:11px;font-weight:bold;padding:2px 8px;border-radius:10px;animation:notice-pulse 1.5s ease-in-out infinite}
+@keyframes notice-pulse{0%,100%{opacity:1}50%{opacity:.6}}

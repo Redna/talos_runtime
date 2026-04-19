@@ -1,4 +1,4 @@
-let ws=null,state={},events=[],commit={},containers={},thinkActive=false,autoScroll=true,prevMsgCount=0,currentAssistantEl=null,isPaused=false,callPending=false;
+let ws=null,state={},events=[],commit={},containers={},thinkActive=false,autoScroll=true,prevMsgCount=0,currentAssistantEl=null,isPaused=false,callPending=false,lastTrajectoryKey="";
 const CONTAINER_KEYS=new Set(["gate","talos","ollama","llamacpp"]);
 const COLLAPSE_LINES=5;
 
@@ -18,6 +18,14 @@ function updateStatusUI(){
     const pending=document.getElementById("pending-indicator");
     const pendingText=document.getElementById("pending-text");
     const pauseBtn=document.getElementById("pause-btn");
+    const noticesBadge=document.getElementById("notices-badge");
+    const qn=state.queued_notices||0;
+    const pn=state.pending_notices||0;
+    const totalNotices=qn+pn;
+    if(noticesBadge){
+        if(totalNotices>0){noticesBadge.classList.remove("hidden");noticesBadge.textContent=totalNotices+" notice"+(totalNotices>1?"s":"")}
+        else{noticesBadge.classList.add("hidden")}
+    }
     if(isPaused){
         badge.className="status-badge status-paused";
         dot.textContent="⏸";
@@ -46,7 +54,7 @@ function connect(){
   const proto=location.protocol==="https:"?"wss:":"ws:";
   ws=new WebSocket(proto+"//"+location.host+"/ws");
   ws.onopen=()=>{document.getElementById("ws-status").className="status-dot connected"};
-  ws.onclose=()=>{document.getElementById("ws-status").className="status-dot error";setTimeout(connect,3000)};
+  ws.onclose=()=>{document.getElementById("ws-status").className="status-dot error";setTimeout(connect,5000)};
   ws.onmessage=e=>{const msg=JSON.parse(e.data);handleMessage(msg)};
 }
 
@@ -55,7 +63,7 @@ function handleMessage(msg){
     case"full_snapshot":state=msg.state||{};events=msg.events||[];commit=msg.commit||{};containers=msg.container_status||{};renderAll();break;
     case"state_update":state={...state,...msg};if(msg.is_paused!==undefined||msg.call_pending!==undefined){isPaused=msg.is_paused||false;callPending=msg.call_pending||false;updateStatusUI()}renderState();renderHealth();break;
     case"state":state={...state,...msg};if(msg.is_paused!==undefined||msg.call_pending!==undefined){isPaused=msg.is_paused||false;callPending=msg.call_pending||false;updateStatusUI()}renderState();break;
-    case"trajectory":renderTrajectory(msg.messages,msg.model,msg.total_count,msg.showing_count);break;
+    case"trajectory":if(!thinkActive)renderTrajectory(msg.messages,msg.model,msg.total_count,msg.showing_count);break;
     case"stream_token":appendLiveToken(msg.content,msg.model);break;
     case"tool_call":appendLiveToolCall(msg.name,msg.arguments);break;
     case"tool_result":break;
@@ -236,6 +244,9 @@ function appendError(message,model){
 function renderTrajectory(messages,model,totalCount,showingCount){
   const transcript=document.getElementById("transcript");if(!transcript)return;
   const newCount=messages?messages.length:0;
+  const key=totalCount+"|"+showingCount+"|"+newCount;
+  if(key===lastTrajectoryKey)return;
+  lastTrajectoryKey=key;
   currentAssistantEl=null;transcript.innerHTML="";
   if(totalCount&&totalCount>showingCount){
     const notice=document.createElement("div");notice.className="fold-notice";
