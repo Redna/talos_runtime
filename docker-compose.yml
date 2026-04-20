@@ -6,8 +6,6 @@ services:
     container_name: talos_agent
     security_opt:
       - seccomp=unconfined
-    ports:
-      - "4001:4001"
     env_file: .env
     environment:
       - TALOS_REPO_DIR=/app
@@ -45,11 +43,13 @@ services:
     volumes:
       - ./memory:/memory:rw
       - ./llm_logs:/runtime_logs:rw
+      - ./xray_data:/data:rw
     environment:
       - TOGETHERAI_API_KEY=${TOGETHERAI_API_KEY:-}
       - OLLAMA_HOST=${OLLAMA_HOST:-host.docker.internal:11434}
       - MEMORY_DIR=/memory
       - RUNTIME_LOG_DIR=/runtime_logs
+      - DATA_DIR=/data
       - DAILY_BUDGET_LIMIT=${DAILY_BUDGET_LIMIT:-5.00}
       - TALOS_CONTEXT_WINDOW=${TALOS_CONTEXT_WINDOW:-71680}
     healthcheck:
@@ -70,12 +70,13 @@ services:
       - "4040:4040"
     environment:
       - GATE_URL=http://gate:4000
-      - SPINE_URL=http://talos_agent:4001
+      - SPINE_DIR=/spine
       - OLLAMA_HOST=${OLLAMA_HOST:-host.docker.internal:11434}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:
       - ./xray_data:/data
+      - spine_observability:/spine:rw
     depends_on:
       gate:
         condition: service_healthy

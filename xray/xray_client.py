@@ -3,23 +3,25 @@ from __future__ import annotations
 import asyncio
 import datetime
 import json
+import logging
 import os
-import time
 from pathlib import Path
 from typing import Any, Callable
 
 import httpx
+
+logger = logging.getLogger("xray.client")
 
 
 class XRayClient:
     def __init__(
         self,
         gate_url: str,
-        spine_url: str,
+        spine_dir: str,
         on_event: Callable[[dict], None],
     ):
         self.gate_url = gate_url
-        self.spine_url = spine_url
+        self.spine_dir = Path(spine_dir)
         self.on_event = on_event
         self._running = False
         self._state: dict[str, Any] = {}
@@ -28,22 +30,20 @@ class XRayClient:
         self._container_status: dict[str, str] = {}
         self._data_dir = Path(os.getenv("XRAY_DATA_DIR", "/data"))
         self._data_dir.mkdir(parents=True, exist_ok=True)
-        self._stats_file = self._data_dir / "token_stats.json"
-        self._last_stats_write = 0.0
+        self._messages: list[dict] = []
+        self._max_messages = 500
+        self._file_offset = 0
+        self._current_trace_path: Path | None = None
         self.is_paused = False
-        self.call_pending = False
         self._last_state_event: dict = {}
 
     async def start(self):
         self._running = True
         tasks = [
-            asyncio.create_task(self._subscribe_gate_stream()),
-            asyncio.create_task(self._subscribe_gate_state()),
+            asyncio.create_task(self._tail_message_trace()),
             asyncio.create_task(self._poll_spine_state()),
-            asyncio.create_task(self._poll_spine_events()),
             asyncio.create_task(self._poll_health_probes()),
             asyncio.create_task(self._poll_spine_commit()),
-            asyncio.create_task(self._persist_token_stats()),
         ]
         await asyncio.gather(*tasks)
 
@@ -57,125 +57,78 @@ class XRayClient:
             "events": events[-200:],
             "commit": self._commit,
             "container_status": self._container_status,
+            "messages": self._messages[-self._max_messages :],
         }
 
-    async def _subscribe_gate_stream(self):
-        backoff = 1.0
+    async def _tail_message_trace(self):
         while self._running:
             try:
-                async with httpx.AsyncClient(timeout=60.0) as client:
-                    async with client.stream(
-                        "GET", f"{self.gate_url}/v1/xray/stream"
-                    ) as resp:
-                        backoff = 1.0
-                        async for line in resp.aiter_lines():
-                            if not line.startswith("data: "):
+                today = datetime.date.today().isoformat()
+                path = self._data_dir / "messages" / f"{today}.jsonl"
+                if path.exists():
+                    if path != self._current_trace_path:
+                        self._current_trace_path = path
+                        self._file_offset = 0
+                    with open(path, "r", encoding="utf-8") as f:
+                        f.seek(self._file_offset)
+                        for line in f:
+                            line = line.strip()
+                            if not line:
                                 continue
-                            payload = line[6:]
-                            if not payload:
-                                continue
-                            try:
-                                event = json.loads(payload)
-                                self.on_event(event)
-                                if event.get("type") == "think_start":
-                                    self.call_pending = True
-                                elif (
-                                    event.get("type") == "think_end"
-                                    or event.get("type") == "tool_call"
-                                ):
-                                    self.call_pending = False
-                                elif event.get("stream_token") and event.get("think"):
-                                    self.call_pending = True
-                            except json.JSONDecodeError:
-                                pass
+                            msg = json.loads(line)
+                            self._messages.append(msg)
+                            if len(self._messages) > self._max_messages:
+                                self._messages = self._messages[-self._max_messages :]
+                            self.on_event({"type": "message", "message": msg})
+                        self._file_offset = f.tell()
+            except FileNotFoundError:
+                pass
+            except (json.JSONDecodeError, ValueError) as e:
+                logger.warning("[XRay] Skipping malformed JSONL line: %s", e)
             except Exception:
-                await asyncio.sleep(backoff)
-                backoff = min(backoff * 2, 30.0)
-
-    async def _subscribe_gate_state(self):
-        backoff = 1.0
-        while self._running:
-            try:
-                async with httpx.AsyncClient(timeout=60.0) as client:
-                    async with client.stream(
-                        "GET", f"{self.gate_url}/v1/xray/state"
-                    ) as resp:
-                        backoff = 1.0
-                        async for line in resp.aiter_lines():
-                            if not line.startswith("data: "):
-                                continue
-                            try:
-                                event = json.loads(line[6:])
-                                self.on_event(event)
-                            except json.JSONDecodeError:
-                                pass
-            except Exception:
-                await asyncio.sleep(backoff)
-                backoff = min(backoff * 2, 30.0)
+                await asyncio.sleep(2)
+                continue
+            await asyncio.sleep(1)
 
     async def _poll_spine_state(self):
         backoff = 1.0
         while self._running:
             try:
-                async with httpx.AsyncClient(timeout=5.0) as client:
-                    resp = await client.get(f"{self.spine_url}/state")
-                    if resp.status_code == 200:
-                        self._state = resp.json()
-                        self.is_paused = self._state.get("is_paused", False)
-                    try:
-                        health_resp = await client.get(f"{self.spine_url}/health")
-                        if health_resp.status_code == 200:
-                            health_data = health_resp.json()
-                            self._state["spine_status"] = health_data.get(
-                                "status", "unknown"
-                            )
-                            if "consecutive_failures" in health_data:
-                                self._state["consecutive_failures"] = health_data[
-                                    "consecutive_failures"
-                                ]
-                    except Exception:
-                        self._state["spine_status"] = "offline"
-                    new_event = {
-                        "type": "state_update",
-                        "is_paused": self.is_paused,
-                        "call_pending": self.call_pending,
-                        **self._state,
-                    }
-                    if new_event != self._last_state_event:
-                        self._last_state_event = new_event
-                        self.on_event(new_event)
-                    backoff = 1.0
+                state_path = self.spine_dir / "state.json"
+                if state_path.exists():
+                    with open(state_path, "r", encoding="utf-8") as f:
+                        self._state = json.load(f)
+                    self.is_paused = self._state.get("is_paused", False)
+                new_event = {
+                    "type": "state_update",
+                    "is_paused": self.is_paused,
+                    **self._state,
+                }
+                if new_event != self._last_state_event:
+                    self._last_state_event = new_event
+                    self.on_event(new_event)
+                backoff = 1.0
             except Exception:
                 backoff = min(backoff * 2, 30.0)
             await asyncio.sleep(3)
 
-    async def _poll_spine_events(self):
-        while self._running:
-            try:
-                async with httpx.AsyncClient(timeout=5.0) as client:
-                    resp = await client.get(f"{self.spine_url}/events?tail=200")
-                    if resp.status_code == 200:
-                        data = resp.json()
-                        if isinstance(data, list):
-                            self._events = data
-            except Exception:
-                pass
-            await asyncio.sleep(10)
-
     async def _poll_health_probes(self):
         while self._running:
             status = {}
-            for name, url in [
-                ("gate", f"{self.gate_url}/health"),
-                ("talos", f"{self.spine_url}/health"),
-            ]:
-                try:
-                    async with httpx.AsyncClient(timeout=3.0) as client:
-                        resp = await client.get(url)
-                        data = resp.json()
-                        status[name] = data.get("status", "unknown")
-                except Exception:
-                    status[name] = "offline"
+            try:
+                async with httpx.AsyncClient(timeout=3.0) as client:
+                    resp = await client.get(f"{self.gate_url}/healthz")
+                    data = resp.json()
+                    status["gate"] = data.get("status", "unknown")
+            except Exception:
+                status["gate"] = "offline"
+            health_path = self.spine_dir / "health.json"
+            try:
+                with open(health_path, "r", encoding="utf-8") as f:
+                    health_data = json.load(f)
+                status["talos"] = health_data.get("status", "unknown")
+            except Exception:
+                status["talos"] = "offline"
             try:
                 ollama_host = os.environ.get(
                     "OLLAMA_HOST", "host.docker.internal:11434"
@@ -199,44 +152,11 @@ class XRayClient:
     async def _poll_spine_commit(self):
         while self._running:
             try:
-                async with httpx.AsyncClient(timeout=5.0) as client:
-                    resp = await client.get(f"{self.spine_url}/commit")
-                    if resp.status_code == 200:
-                        self._commit = resp.json()
-                        self.on_event({"type": "commit_info", **self._commit})
+                commit_path = self.spine_dir / "commit.json"
+                if commit_path.exists():
+                    with open(commit_path, "r", encoding="utf-8") as f:
+                        self._commit = json.load(f)
+                    self.on_event({"type": "commit_info", **self._commit})
             except Exception:
                 pass
             await asyncio.sleep(30)
-
-    async def _persist_token_stats(self):
-        while self._running:
-            now = time.time()
-            if now - self._last_stats_write >= 300:
-                try:
-                    today = datetime.date.today().isoformat()
-                    existing = []
-                    if self._stats_file.exists():
-                        try:
-                            existing = json.loads(self._stats_file.read_text())
-                        except Exception:
-                            pass
-                    entry = {
-                        "date": today,
-                        "tokens_in": self._state.get("tokens_used", 0),
-                        "tokens_out": 0,
-                        "turns": self._state.get("turn", 0),
-                        "requests": self._state.get("message_count", 0),
-                    }
-                    found = False
-                    for e in existing:
-                        if e["date"] == today:
-                            e.update(entry)
-                            found = True
-                            break
-                    if not found:
-                        existing.append(entry)
-                    self._stats_file.write_text(json.dumps(existing, indent=2))
-                    self._last_stats_write = now
-                except Exception:
-                    pass
-            await asyncio.sleep(60)

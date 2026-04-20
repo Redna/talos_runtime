@@ -16,7 +16,7 @@ from fastapi.staticfiles import StaticFiles
 from xray_client import XRayClient
 
 GATE_URL = os.getenv("GATE_URL", "http://gate:4000")
-SPINE_URL = os.getenv("SPINE_URL", "http://talos_agent:4001")
+SPINE_DIR = os.getenv("SPINE_DIR", "/spine")
 
 static_dir = Path(__file__).parent / "static"
 
@@ -51,7 +51,7 @@ async def lifespan(app: FastAPI):
     global _xray_client, _xray_task, _broadcast_queue
     print("[Xray] Lifespan starting...", flush=True)
     _broadcast_queue = asyncio.Queue()
-    _xray_client = XRayClient(GATE_URL, SPINE_URL, _broadcast)
+    _xray_client = XRayClient(GATE_URL, SPINE_DIR, _broadcast)
     _xray_task = asyncio.create_task(_xray_client.start())
     _broadcast_loop_task = asyncio.create_task(_broadcast_loop())
     print(f"[Xray] Client started, task={_xray_task}", flush=True)
@@ -99,7 +99,10 @@ async def websocket_endpoint(ws: WebSocket):
 @app.get("/api/state")
 async def api_state():
     if _xray_client:
-        return _xray_client._state
+        return {
+            **_xray_client._state,
+            "messages": _xray_client._messages[-100:],
+        }
     return {}
 
 
@@ -107,12 +110,18 @@ async def api_state():
 async def api_command(request: Request):
     data = await request.json()
     try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.post(f"{SPINE_URL}/command", json=data)
-            return JSONResponse(
-                content=resp.json() if resp.text else {"status": "ok"},
-                status_code=resp.status_code,
-            )
+        command = data.get("command", "")
+        spine = Path(SPINE_DIR)
+        if command == "pause":
+            (spine / ".paused").touch()
+        elif command == "resume":
+            paused = spine / ".paused"
+            if paused.exists():
+                paused.unlink()
+            (spine / ".wake").touch()
+        elif command == "force_restart":
+            (spine / ".restart").touch()
+        return JSONResponse(content={"status": "ok"}, status_code=200)
     except Exception as e:
         return JSONResponse(content={"error": str(e)}, status_code=503)
 
