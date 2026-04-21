@@ -676,10 +676,13 @@ def reset(hard=False):
         p = Path(d)
         if p.exists():
             try:
-                shutil.rmtree(p)
+                # Files may be owned by root (container user). Use rm -rf via subprocess
+                # which can be sudoed, or just try and skip on permission error.
+                result = subprocess.run(["rm", "-rf", str(p)], capture_output=True, text=True)
+                if result.returncode != 0:
+                    print(f"[talosctl] Warning: could not remove {p}. Skipping.")
             except OSError as e:
-                print(f"[talosctl] Failed to remove {p}: {e}")
-                sys.exit(1)
+                print(f"[talosctl] Warning: could not remove {p}: {e}. Skipping.")
 
     if hard:
         print("[talosctl] Wiping memory...")
@@ -689,10 +692,11 @@ def reset(hard=False):
                     if item.is_file():
                         item.unlink()
                     elif item.is_dir():
-                        shutil.rmtree(item)
+                        result = subprocess.run(["rm", "-rf", str(item)], capture_output=True, text=True)
+                        if result.returncode != 0:
+                            print(f"[talosctl] Warning: could not remove {item}. Skipping.")
             except OSError as e:
-                print(f"[talosctl] Failed to wipe memory: {e}")
-                sys.exit(1)
+                print(f"[talosctl] Warning: could not wipe memory dir: {e}. Skipping.")
 
     MEMORY_DIR.mkdir(parents=True, exist_ok=True)
     (RUNTIME_DIR / "xray_data").mkdir(parents=True, exist_ok=True)
