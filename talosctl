@@ -655,7 +655,7 @@ def reset(hard=False):
 
     print("[talosctl] Stopping containers...")
     try:
-        subprocess.run(f"docker compose {compose_args} down", shell=True, check=True)
+        subprocess.run(f"docker compose {compose_args} down", shell=True, cwd=str(RUNTIME_DIR), check=True)
     except subprocess.CalledProcessError as e:
         print(f"[talosctl] Failed to stop containers: {e}")
         sys.exit(1)
@@ -704,7 +704,7 @@ def reset(hard=False):
 
     print("[talosctl] Starting fresh...")
     try:
-        subprocess.run(f"docker compose {compose_args} up -d --build", shell=True, check=True)
+        subprocess.run(f"docker compose {compose_args} up -d --build", shell=True, cwd=str(RUNTIME_DIR), check=True)
     except subprocess.CalledProcessError as e:
         print(f"[talosctl] Failed to start containers: {e}")
         sys.exit(1)
