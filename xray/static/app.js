@@ -1,4 +1,4 @@
-let ws=null,state={},events=[],commit={},containers={},autoScroll=true,currentTurnEl=null;
+let ws=null,state={},events=[],commit={},containers={},autoScroll=true,currentTurnEl=null,stepPending=false;
 const CONTAINER_KEYS=new Set(["gate","talos","ollama","llamacpp"]);
 const COLLAPSE_LINES=8;
 const COLLAPSE_CHARS=800;
@@ -32,6 +32,7 @@ function updateStatusUI(){
         const stepBtn=document.getElementById("step-btn");
         if(stepBtn)stepBtn.style.display="none";
     }
+    updateStepButton();
 }
 
 document.addEventListener('DOMContentLoaded',()=>{
@@ -64,11 +65,19 @@ function handleMessage(msg){
     case"state_update":
       state={...state,...msg};
       if(msg.is_paused!==undefined)updateStatusUI();
+      if(msg.is_paused&&stepPending){
+        stepPending=false;
+        updateStepButton();
+      }
       renderState();renderHealth();
       break;
     case"state":
       state={...state,...msg};
       if(msg.is_paused!==undefined)updateStatusUI();
+      if(msg.is_paused&&stepPending){
+        stepPending=false;
+        updateStepButton();
+      }
       renderState();
       break;
     case"message":
@@ -91,6 +100,7 @@ function handleMessage(msg){
 function renderAll(){
   renderState();renderHealth();renderContainers();renderEvents();renderCommit();
   updateStatusUI();
+  updateStepButton();
 }
 
 function renderState(){
@@ -168,7 +178,26 @@ function updateContextBar(pct){
   else fill.style.backgroundColor="var(--red)";
 }
 
-async function sendCommand(cmd){await fetch("/api/command",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({command:cmd})})}
+function updateStepButton(){
+    const stepBtn=document.getElementById("step-btn");
+    if(!stepBtn)return;
+    if(stepPending){
+        stepBtn.disabled=true;
+        stepBtn.textContent="Stepping…";
+        stepBtn.style.opacity="0.6";
+    }else{
+        stepBtn.disabled=false;
+        stepBtn.textContent="Next Step";
+        stepBtn.style.opacity="1";
+    }
+}
+
+async function sendCommand(cmd){
+    if(cmd==="step"){
+        stepPending=true;
+        updateStepButton();
+    }
+    await fetch("/api/command",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({command:cmd})})
 
 function setupScrollPause(){
   const el=document.getElementById("transcript");if(!el)return;
@@ -224,6 +253,10 @@ function appendMessage(msg){
   const role=msg.role||"unknown";
 
   if(role==="assistant"){
+    if(stepPending){
+      stepPending="receiving";
+      updateStepButton();
+    }
     const turn={type:"assistant",assistant:msg,toolResults:[]};
     appendTurn(transcript,turn);
     currentTurnEl={el:transcript.lastElementChild,toolResults:turn.toolResults,assistant:msg};
