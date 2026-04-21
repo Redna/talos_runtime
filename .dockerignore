@@ -16,3 +16,4 @@ __pycache__/
 .pytest_cache/
 .mypy_cache/
 .venv/
+talos/tests-spine/
