@@ -20,6 +20,7 @@ services:
       - GITHUB_SSH_KEY=${GITHUB_SSH_KEY:-}
       - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN:-}
       - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID:-0}
+      - TALOS_MODEL=${TALOS_MODEL:-}
     volumes:
       - ./memory:/memory
       - spine_observability:/spine

@@ -4,17 +4,7 @@
   "constitution_path": "/app/CONSTITUTION.md",
   "identity_path": "/app/identity.md",
   "app_dir": "/app",
-  "cortex_bin": "/venv/bin/python",
-  "cortex_args": ["cortex/seed_agent.py"],
   "socket_path": "/tmp/spine.sock",
-  "control_plane_port": 4001,
-  "context_threshold": 0.85,
-  "active_window": 5,
-  "max_context_tokens": 71680,
-  "gate_url": "http://gate:4000",
-  "stall_timeout": 600,
-  "snapshot_interval": 10,
-  "max_reversal_depth": 5,
-  "shed_tool_output_max_chars": 500,
-  "gate_model": "gemma4:31b-cloud"
+  "context_threshold_pct": 0.85,
+  "gate_url": "http://gate:4000/v1/chat/completions"
 }

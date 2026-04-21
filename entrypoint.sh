@@ -15,6 +15,11 @@ GIT_BRANCH=feat/talos
 
 cd /app
 
+echo "gitdir: /runtime_git" > /app/.git
+if grep -q 'worktree = ' /runtime_git/config 2>/dev/null; then
+    sed -i 's|worktree = .*|worktree = /app|' /runtime_git/config
+fi
+
 if git ls-remote --exit-code "$GIT_REMOTE" "$GIT_BRANCH" > /dev/null 2>&1; then
     echo "[Entrypoint] Branch $GIT_BRANCH exists on $GIT_REMOTE, pulling latest..."
     git fetch "$GIT_REMOTE" "$GIT_BRANCH"
@@ -38,8 +43,8 @@ cp -a /spine_pristine/. /app/spine/
 
 chown -R "$USER_NAME":"$GROUP_ID" /app
 chown -R "$USER_NAME":"$GROUP_ID" /memory
-mkdir -p /spine/events /spine/snapshots /spine/crashes
-chown -R "$USER_NAME":"$GROUP_ID" /spine/events /spine/snapshots /spine/crashes
+mkdir -p /spine/events /spine/trajectories
+chown -R "$USER_NAME":"$GROUP_ID" /spine/events /spine/trajectories
 
 git config --global --add safe.directory /app
 sudo -u "$USER_NAME" -H git config --global user.name "Talos"
