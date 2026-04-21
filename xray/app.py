@@ -121,6 +121,11 @@ async def api_command(request: Request):
             (spine / ".wake").touch()
         elif command == "force_restart":
             (spine / ".restart").touch()
+        elif command == "step":
+            (spine / ".single_step").touch(exist_ok=True)
+            wake = spine / ".paused"
+            if wake.exists():
+                wake.unlink()
         return JSONResponse(content={"status": "ok"}, status_code=200)
     except Exception as e:
         return JSONResponse(content={"error": str(e)}, status_code=503)
