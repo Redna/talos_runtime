@@ -18,15 +18,11 @@
                 <span id="status-dot">●</span>
                 <span id="status-text">Idle</span>
             </span>
-            <span id="pending-indicator" class="pending-indicator hidden">
-                <span class="spinner"></span>
-                <span id="pending-text">Waiting on LLM...</span>
-            </span>
             <span id="model-info"></span>
             <span id="turn-count">Turn: 0</span>
             <span id="spend">Spend: $0.00</span>
             <div id="ws-status" class="status-dot"></div>
-            <span id="notices-badge" class="notices-badge hidden" title="Queued notices"></span>
+
         </div>
     </header>
 
@@ -36,8 +32,6 @@
             <span id="context-text">0%</span>
         </div>
         <div id="token-counters">
-            <span id="tokens-in">In: 0</span>
-            <span id="tokens-out">Out: 0</span>
             <span id="tokens-total">Total: 0</span>
         </div>
     </div>
@@ -74,11 +68,6 @@
     </div>
 
     <div id="view-stream" class="view">
-        <div id="stream-header">
-            <span id="stream-status" class="status-dot"></span>
-            <span id="stream-turn">Turn —</span>
-            <span id="stream-model">—</span>
-        </div>
         <div id="transcript"></div>
     </div>
 

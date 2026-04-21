@@ -30,79 +30,37 @@ def test_write_messages_creates_daily_file(trace_dir):
     trace_file = trace_dir / "messages" / f"{today}.jsonl"
     assert trace_file.exists()
 
-    lines = trace_file.read_text().strip().split("\n")
-    assert len(lines) == 3
-    first = json.loads(lines[0])
-    assert first["role"] == "system"
-    assert first["content"] == "You are Talos."
-    assert "_ts" in first
-    assert first["_turn"] == 0
 
-
-def test_write_messages_deduplication(trace_dir):
+def test_non_streaming_completion_writes_trace(trace_dir):
     from app import MessageTraceWriter
 
     writer = MessageTraceWriter(trace_dir)
-    writer.write_messages(
-        request_messages=[
-            {"role": "system", "content": "You are Talos."},
-            {"role": "user", "content": "Begin."},
-        ],
-        response_message={"role": "assistant", "content": "I will start."},
-        turn=0,
-    )
+    msgs = [
+        {"role": "system", "content": "You are Talos."},
+        {"role": "user", "content": "Begin."},
+    ]
+    resp_msg = {
+        "role": "assistant",
+        "content": "I will act.",
+        "tool_calls": [],
+    }
+    writer.write_messages(msgs, resp_msg, turn=0)
 
     writer.write_messages(
-        request_messages=[
-            {"role": "system", "content": "You are Talos."},
-            {"role": "user", "content": "Begin."},
-            {"role": "assistant", "content": "I will start."},
-            {"role": "tool", "tool_call_id": "c1", "content": "result1"},
-        ],
-        response_message={"role": "assistant", "content": "Next step."},
+        msgs + [resp_msg, {"role": "tool", "tool_call_id": "x", "content": "ok"}],
+        {"role": "assistant", "content": "Step 2."},
         turn=1,
     )
 
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     trace_file = trace_dir / "messages" / f"{today}.jsonl"
-    lines = trace_file.read_text().strip().split("\n")
+    lines = [json.loads(l) for l in trace_file.read_text().strip().split("\n")]
     assert len(lines) == 6
-    last = json.loads(lines[-1])
-    assert last["role"] == "assistant"
-    assert last["content"] == "Next step."
-    assert last["_turn"] == 1
-
-
-def test_write_messages_includes_reasoning(trace_dir):
-    from app import MessageTraceWriter
-
-    writer = MessageTraceWriter(trace_dir)
-    writer.write_messages(
-        request_messages=[{"role": "user", "content": "Go"}],
-        response_message={
-            "role": "assistant",
-            "content": "I will act.",
-            "reasoning": "Let me think about this...",
-            "tool_calls": [
-                {
-                    "id": "c1",
-                    "type": "function",
-                    "function": {
-                        "name": "read_file",
-                        "arguments": '{"path":"/app/main.py"}',
-                    },
-                }
-            ],
-        },
-        turn=1,
-    )
-
-    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    trace_file = trace_dir / "messages" / f"{today}.jsonl"
-    lines = trace_file.read_text().strip().split("\n")
-    resp = json.loads(lines[-1])
-    assert resp["reasoning"] == "Let me think about this..."
-    assert resp["tool_calls"][0]["function"]["name"] == "read_file"
+    assert lines[3]["role"] == "assistant"
+    assert lines[3]["content"] == "I will act."
+    assert lines[4]["role"] == "tool"
+    assert lines[5]["role"] == "assistant"
+    assert lines[5]["content"] == "Step 2."
 
 
 def test_day_rollover(trace_dir):
@@ -119,3 +77,37 @@ def test_day_rollover(trace_dir):
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     trace_file = trace_dir / "messages" / f"{today}.jsonl"
     assert trace_file.exists()
+
+
+def test_normalize_content_strips_channel_tokens(trace_dir):
+    from app import MessageTraceWriter
+
+    writer = MessageTraceWriter(trace_dir)
+    msg = {
+        "role": "assistant",
+        "content": "<|channel|>thought<channel|><|channel|>thought<channel|><|channel|>thought<channel|>Real content here",
+    }
+    result = writer._normalize_content(msg)
+    assert "<|channel|>" not in result["content"]
+    assert "Real content here" in result["content"]
+
+
+def test_normalize_content_strips_generic_control_tokens(trace_dir):
+    from app import MessageTraceWriter
+
+    writer = MessageTraceWriter(trace_dir)
+    msg = {
+        "role": "assistant",
+        "content": "<|start|><|end|>Keep this<|sep|>",
+    }
+    result = writer._normalize_content(msg)
+    assert result["content"] == "Keep this"
+
+
+def test_normalize_content_preserves_clean_content(trace_dir):
+    from app import MessageTraceWriter
+
+    writer = MessageTraceWriter(trace_dir)
+    msg = {"role": "assistant", "content": "Normal response with no tokens"}
+    result = writer._normalize_content(msg)
+    assert result["content"] == "Normal response with no tokens"

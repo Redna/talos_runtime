@@ -1,31 +1,12 @@
-import asyncio
+import json
 import pytest
-
-pytest_plugins = ["pytest_asyncio"]
-from app import app, _xray_subscribers, _xray_broadcast
-
-
-@pytest.mark.asyncio(loop_scope="function")
-async def test_no_subscribers_no_overhead():
-    _xray_subscribers.clear()
-    _xray_broadcast({"type": "token", "content": "hello"})
-    assert len(_xray_subscribers) == 0
-
-
-@pytest.mark.asyncio(loop_scope="function")
-async def test_subscriber_receives_event():
-    _xray_subscribers.clear()
-    q = asyncio.Queue()
-    _xray_subscribers.append(q)
-    _xray_broadcast({"type": "token", "content": "hello"})
-    event = await asyncio.wait_for(q.get(), timeout=1.0)
-    assert event["type"] == "token"
-    assert event["content"] == "hello"
-    _xray_subscribers.clear()
+from pathlib import Path
+from datetime import datetime, timezone
 
 
 def test_xray_history_list():
     from starlette.testclient import TestClient
+    from app import app
 
     client = TestClient(app)
     response = client.get("/v1/xray/history?count=5")
@@ -35,7 +16,20 @@ def test_xray_history_list():
 
 def test_xray_history_detail_not_found():
     from starlette.testclient import TestClient
+    from app import app
 
     client = TestClient(app)
     response = client.get("/v1/xray/history/nonexistent.json")
     assert response.status_code == 404
+
+
+def test_sse_endpoints_removed():
+    from starlette.testclient import TestClient
+    from app import app
+
+    client = TestClient(app)
+    for endpoint in ["/v1/xray/stream", "/v1/xray/state", "/v1/xray/events"]:
+        response = client.get(endpoint, follow_redirects=False)
+        assert response.status_code in (404, 405), (
+            f"Endpoint {endpoint} should be removed"
+        )

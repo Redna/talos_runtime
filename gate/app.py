@@ -1,10 +1,10 @@
 import os
 import json
 import time
-import asyncio
 from pathlib import Path
 from datetime import datetime, timezone
 from typing import Dict, Any, List, Optional, AsyncGenerator
+import re
 import httpx
 from fastapi import (
     FastAPI,
@@ -41,15 +41,6 @@ DATA_DIR = Path(os.getenv("DATA_DIR", "/data"))
 # State
 PRICING_CACHE: Dict[str, Dict[str, float]] = {}
 
-_xray_subscribers: list[asyncio.Queue] = []
-
-
-def _xray_broadcast(event: dict):
-    if not _xray_subscribers:
-        return
-    for q in _xray_subscribers:
-        q.put_nowait(event)
-
 
 class MessageTraceWriter:
     def __init__(self, data_dir: Path):
@@ -67,6 +58,48 @@ class MessageTraceWriter:
             self.data_dir.mkdir(parents=True, exist_ok=True)
             self._file = open(self.data_dir / f"{today}.jsonl", "a", encoding="utf-8")
             self._current_date = today
+
+    def _normalize_content(self, message: dict) -> dict:
+        content = message.get("content", "")
+        if not content:
+            return message
+        content = re.sub(r"<\|channel\|>.*?<\|channel\|>", "", content, flags=re.DOTALL)
+        content = re.sub(r"<\|[^|]*\|>", "", content)
+        content = content.strip()
+        if content != message.get("content", ""):
+            message = {**message, "content": content}
+        return message
+
+    def _normalize_tool_calls(self, message: dict) -> dict:
+        content = message.get("content", "")
+        if not content or "<|tool_call" not in content:
+            return message
+        tool_calls = message.get("tool_calls", [])
+        if tool_calls:
+            return message
+        pattern = r"<\|tool_call\|>call:(\w+)\{(.+?)\}<\|tool_call\|>"
+        matches = re.findall(pattern, content, re.DOTALL)
+        if not matches:
+            pattern2 = r"call:(\w+)\{(.+?)\}"
+            matches = re.findall(pattern2, content, re.DOTALL)
+        for i, (name, args_raw) in enumerate(matches):
+            args_raw = args_raw.replace('<|"|>', '"')
+            try:
+                args = json.loads(args_raw) if args_raw.strip().startswith("{") else {}
+            except (json.JSONDecodeError, ValueError):
+                args = {}
+            tool_calls.append(
+                {
+                    "id": f"call_parsed_{i}_{int(time.time())}",
+                    "type": "function",
+                    "function": {"name": name, "arguments": json.dumps(args)},
+                }
+            )
+        clean = re.sub(
+            r"<\|tool_call\|>.*?<\|tool_call\|>", "", content, flags=re.DOTALL
+        ).strip()
+        message = {**message, "content": clean or "", "tool_calls": tool_calls}
+        return message
 
     def write_messages(
         self,
@@ -88,7 +121,9 @@ class MessageTraceWriter:
 
         self._last_written_count = len(request_messages)
 
-        resp_line = {**response_message, "_ts": ts, "_turn": turn}
+        normalized = self._normalize_content(response_message)
+        normalized = self._normalize_tool_calls(normalized)
+        resp_line = {**normalized, "_ts": ts, "_turn": turn}
         self._file.write(json.dumps(resp_line, default=str) + "\n")
         self._file.flush()
 
@@ -350,7 +385,9 @@ async def chat_completions(request: Request, background_tasks: BackgroundTasks):
     if is_streaming:
 
         async def stream_proxy() -> AsyncGenerator[bytes, None]:
-            _xray_broadcast({"type": "think_start", "model": model, "ts": time.time()})
+            _accumulated_content = ""
+            _accumulated_reasoning = ""
+            _accumulated_tool_calls = []
             try:
                 for m in body.get("messages", []):
                     if m.get("content") is None:
@@ -378,51 +415,41 @@ async def chat_completions(request: Request, background_tasks: BackgroundTasks):
                                 reasoning = delta.get("reasoning", "")
                                 tool_calls = delta.get("tool_calls")
                                 if reasoning:
-                                    _xray_broadcast(
-                                        {
-                                            "type": "thinking_token",
-                                            "content": reasoning,
-                                            "model": model,
-                                            "ts": time.time(),
-                                        }
-                                    )
+                                    _accumulated_reasoning += reasoning
                                 if content:
-                                    _xray_broadcast(
-                                        {
-                                            "type": "stream_token",
-                                            "content": content,
-                                            "model": model,
-                                            "ts": time.time(),
-                                        }
+                                    filtered = re.sub(
+                                        r"<\|channel\|>.*?<\|channel\|>",
+                                        "",
+                                        content,
+                                        flags=re.DOTALL,
                                     )
+                                    filtered = re.sub(r"<\|[^|]*\|>", "", filtered)
+                                    if filtered:
+                                        _accumulated_content += filtered
+                                        delta["content"] = filtered
+                                    else:
+                                        delta.pop("content", None)
+                                    payload = json.dumps(chunk_data)
                                 if tool_calls:
                                     for tc in tool_calls:
                                         if tc.get("function", {}).get("name"):
-                                            _xray_broadcast(
-                                                {
-                                                    "type": "tool_call",
-                                                    "id": tc.get("id", ""),
-                                                    "name": tc["function"]["name"],
-                                                    "arguments": tc["function"].get(
-                                                        "arguments", "{}"
-                                                    ),
-                                                    "model": model,
-                                                    "ts": time.time(),
-                                                }
-                                            )
+                                            _accumulated_tool_calls.append(tc)
                             except json.JSONDecodeError:
                                 pass
                             yield f"data: {payload}\n\n".encode("utf-8")
-                _xray_broadcast(
-                    {
-                        "type": "think_end",
-                        "tokens_in": 0,
-                        "tokens_out": 0,
-                        "context_pct": 0.0,
-                        "model": model,
-                        "backend": backend_key,
-                        "ts": time.time(),
-                    }
+                _trace_writer.write_messages(
+                    body.get("messages", []),
+                    _trace_writer._normalize_content(
+                        _trace_writer._normalize_tool_calls(
+                            {
+                                "role": "assistant",
+                                "content": _accumulated_content,
+                                "reasoning": _accumulated_reasoning,
+                                "tool_calls": _accumulated_tool_calls,
+                            }
+                        )
+                    ),
+                    turn=None,
                 )
                 background_tasks.add_task(
                     log_completion,
@@ -436,14 +463,6 @@ async def chat_completions(request: Request, background_tasks: BackgroundTasks):
                 httpx.TimeoutException,
                 httpx.HTTPStatusError,
             ) as e:
-                _xray_broadcast(
-                    {
-                        "type": "error",
-                        "message": str(e),
-                        "model": model,
-                        "ts": time.time(),
-                    }
-                )
                 error_payload = {
                     "error": {
                         "message": f"Gateway Error: Model '{model}' is currently unreachable or offline. Please check available models or fallback to the local engine. Details: {str(e)}",
@@ -457,7 +476,6 @@ async def chat_completions(request: Request, background_tasks: BackgroundTasks):
 
     else:
         try:
-            _xray_broadcast({"type": "think_start", "model": model, "ts": time.time()})
             for m in body.get("messages", []):
                 if m.get("content") is None:
                     m["content"] = ""
@@ -480,101 +498,21 @@ async def chat_completions(request: Request, background_tasks: BackgroundTasks):
                         else 0.0
                     )
 
-                # Broadcast assistant content as stream tokens for X-ray
-                if resp_json.get("choices"):
-                    content = (
-                        resp_json["choices"][0].get("message", {}).get("content", "")
-                    )
-                    tool_calls = (
-                        resp_json["choices"][0].get("message", {}).get("tool_calls", [])
-                    )
-                    reasoning = (
-                        resp_json["choices"][0].get("message", {}).get("reasoning", "")
-                    )
-                    if reasoning:
-                        _xray_broadcast(
-                            {
-                                "type": "thinking",
-                                "content": reasoning,
-                                "model": model,
-                                "ts": time.time(),
-                            }
-                        )
-                        resp_json["choices"][0]["message"]["content"] = (
-                            f"<thinking>\n{reasoning}\n</thinking>\n{content}"
-                        )
-                    if content:
-                        _xray_broadcast(
-                            {
-                                "type": "stream_token",
-                                "content": content,
-                                "model": model,
-                                "ts": time.time(),
-                            }
-                        )
-                    elif tool_calls:
-                        names = ", ".join(
-                            tc.get("function", {}).get("name", "") for tc in tool_calls
-                        )
-                        _xray_broadcast(
-                            {
-                                "type": "stream_token",
-                                "content": f"Calling: {names}",
-                                "model": model,
-                                "ts": time.time(),
-                            }
-                        )
-                    for tc in tool_calls:
-                        func = tc.get("function", {})
-                        _xray_broadcast(
-                            {
-                                "type": "tool_call",
-                                "id": tc.get("id", ""),
-                                "name": func.get("name", ""),
-                                "arguments": func.get("arguments", "{}"),
-                                "model": model,
-                                "ts": time.time(),
-                            }
-                        )
+                # Normalize Gemma control tokens out of the response content
+                for choice in resp_json.get("choices", []):
+                    msg = choice.get("message", {})
+                    normalized = _trace_writer._normalize_content(msg)
+                    normalized = _trace_writer._normalize_tool_calls(normalized)
+                    choice["message"] = normalized
 
-                _xray_broadcast(
-                    {
-                        "type": "think_end",
-                        "tokens_in": resp_json.get("usage", {}).get("prompt_tokens", 0),
-                        "tokens_out": resp_json.get("usage", {}).get(
-                            "completion_tokens", 0
-                        ),
-                        "context_pct": resp_json.get("usage", {}).get(
-                            "context_pct", 0.0
-                        ),
-                        "model": model,
-                        "backend": backend_key,
-                        "ts": time.time(),
-                    }
-                )
                 background_tasks.add_task(log_completion, body, resp_json, backend_key)
+                _trace_writer.write_messages(
+                    body.get("messages", []),
+                    resp_json.get("choices", [{}])[0].get("message", {}),
+                    turn=None,
+                )
                 return resp_json
         except (httpx.ConnectError, httpx.TimeoutException, httpx.HTTPStatusError) as e:
-            _xray_broadcast(
-                {
-                    "type": "error",
-                    "message": f"Model '{model}' unreachable: {str(e)}",
-                    "model": model,
-                    "backend": backend_key,
-                    "ts": time.time(),
-                }
-            )
-            _xray_broadcast(
-                {
-                    "type": "think_end",
-                    "tokens_in": 0,
-                    "tokens_out": 0,
-                    "context_pct": 0.0,
-                    "model": model,
-                    "backend": backend_key,
-                    "ts": time.time(),
-                }
-            )
             return Response(
                 content=json.dumps(
                     {
@@ -589,26 +527,6 @@ async def chat_completions(request: Request, background_tasks: BackgroundTasks):
                 media_type="application/json",
             )
         except Exception as e:
-            _xray_broadcast(
-                {
-                    "type": "error",
-                    "message": f"Critical: {str(e)}",
-                    "model": model,
-                    "backend": backend_key,
-                    "ts": time.time(),
-                }
-            )
-            _xray_broadcast(
-                {
-                    "type": "think_end",
-                    "tokens_in": 0,
-                    "tokens_out": 0,
-                    "context_pct": 0.0,
-                    "model": model,
-                    "backend": backend_key,
-                    "ts": time.time(),
-                }
-            )
             return Response(
                 content=json.dumps(
                     {
@@ -871,61 +789,6 @@ async def health():
         "ollama_ready": ollama_ok,
         "current_spend": f"{get_current_spend():.4f}/{DAILY_BUDGET_LIMIT:.4f}",
     }
-
-
-@app.get("/v1/xray/stream")
-async def xray_stream(request: Request):
-    from sse_starlette.sse import EventSourceResponse
-
-    q = asyncio.Queue()
-    _xray_subscribers.append(q)
-
-    async def event_generator():
-        try:
-            while True:
-                try:
-                    event = await asyncio.wait_for(q.get(), timeout=15.0)
-                    yield {"event": "message", "data": json.dumps(event)}
-                except asyncio.TimeoutError:
-                    yield {"event": "ping", "data": ""}
-        finally:
-            if q in _xray_subscribers:
-                _xray_subscribers.remove(q)
-
-    return EventSourceResponse(event_generator())
-
-
-@app.get("/v1/xray/state")
-async def xray_state(request: Request):
-    from sse_starlette.sse import EventSourceResponse
-
-    async def event_generator():
-        while True:
-            yield {
-                "event": "message",
-                "data": json.dumps(
-                    {
-                        "type": "state",
-                        "spend": get_current_spend(),
-                        "budget_limit": DAILY_BUDGET_LIMIT,
-                    }
-                ),
-            }
-            await asyncio.sleep(10)
-
-    return EventSourceResponse(event_generator())
-
-
-@app.get("/v1/xray/events")
-async def xray_events(request: Request):
-    from sse_starlette.sse import EventSourceResponse
-
-    async def event_generator():
-        while True:
-            yield {"event": "ping", "data": ""}
-            await asyncio.sleep(15)
-
-    return EventSourceResponse(event_generator())
 
 
 @app.get("/v1/xray/history")
