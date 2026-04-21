@@ -617,10 +617,95 @@ def pause():
     else:
         sys.exit(1)
 
+def resume():
+    if _send_api_command("resume"):
+        print("Agent resumed.")
+    else:
+        sys.exit(1)
+
+def step():
+    if _send_api_command("step"):
+        print("Step triggered. Turn will advance when gate returns.")
+    else:
+        sys.exit(1)
+
+def events(tail=50):
+    ls_result = subprocess.run(
+        "docker exec talos_agent ls -t /spine/events/*.jsonl",
+        shell=True, capture_output=True, text=True
+    )
+    if ls_result.returncode != 0 or not ls_result.stdout.strip():
+        print("[talosctl] No event files found. Is the agent running?")
+        sys.exit(1)
+    latest_file = ls_result.stdout.strip().splitlines()[0]
+    cmd = f"docker exec talos_agent tail -n {tail} {latest_file}"
+    subprocess.run(cmd, shell=True)
+
+def reset(hard=False):
+    compose_args = get_compose_args(cached=True)
+    memory_dir = Path("memory")
+    if not hard and memory_dir.exists() and any(memory_dir.iterdir()):
+        print("[talosctl] Memory dir contains files. Use --hard to wipe, or clear manually.")
+        sys.exit(1)
+
+    print("[talosctl] Stopping containers...")
+    subprocess.run(f"docker compose {compose_args} down", shell=True, check=False)
+
+    print("[talosctl] Wiping runtime state...")
+    vol_result = subprocess.run(
+        "docker volume ls -q -f name=spine_observability",
+        shell=True, capture_output=True, text=True
+    )
+    for vol in vol_result.stdout.strip().splitlines():
+        subprocess.run(f"docker volume rm {vol}", shell=True, check=False)
+
+    for d in ["./xray_data", "./llm_logs"]:
+        p = Path(d)
+        if p.exists():
+            shutil.rmtree(p)
+
+    if hard:
+        print("[talosctl] Wiping memory...")
+        if memory_dir.exists():
+            for item in memory_dir.iterdir():
+                if item.is_file():
+                    item.unlink()
+                elif item.is_dir():
+                    shutil.rmtree(item)
+
+    Path("memory").mkdir(parents=True, exist_ok=True)
+    Path("xray_data").mkdir(parents=True, exist_ok=True)
+    Path("llm_logs").mkdir(parents=True, exist_ok=True)
+
+    print("[talosctl] Starting fresh...")
+    subprocess.run(f"docker compose {compose_args} up -d --build", shell=True, check=False)
+    print("[talosctl] Reset complete. Agent started from turn 0.")
+
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    parser.add_argument("command", choices=["start", "stop", "logs", "monitor", "status", "daemon", "pause"])
+    parser = argparse.ArgumentParser(prog="talosctl")
+    subparsers = parser.add_subparsers(dest="command")
+
+    subparsers.add_parser("start")
+    subparsers.add_parser("stop")
+    subparsers.add_parser("logs")
+    subparsers.add_parser("monitor")
+    subparsers.add_parser("status")
+    subparsers.add_parser("daemon")
+    subparsers.add_parser("pause")
+    subparsers.add_parser("resume")
+    subparsers.add_parser("step")
+
+    events_parser = subparsers.add_parser("events")
+    events_parser.add_argument("--tail", type=int, default=50)
+
+    reset_parser = subparsers.add_parser("reset")
+    reset_parser.add_argument("--hard", action="store_true", help="Also wipe ./memory/")
+
     args = parser.parse_args()
+    if not args.command:
+        parser.print_help()
+        sys.exit(1)
+
     if args.command == "start": start()
     elif args.command == "stop": stop()
     elif args.command == "logs": logs()
@@ -628,3 +713,7 @@ if __name__ == "__main__":
     elif args.command == "status": status()
     elif args.command == "daemon": run_daemon()
     elif args.command == "pause": pause()
+    elif args.command == "resume": resume()
+    elif args.command == "step": step()
+    elif args.command == "events": events(args.tail)
+    elif args.command == "reset": reset(args.hard)
