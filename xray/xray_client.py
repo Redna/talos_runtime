@@ -98,7 +98,8 @@ class XRayClient:
                 if state_path.exists():
                     with open(state_path, "r", encoding="utf-8") as f:
                         self._state = json.load(f)
-                    self.is_paused = (self.spine_dir / ".paused").exists()
+                self.is_paused = (self.spine_dir / ".paused").exists()
+                self._state["is_paused"] = self.is_paused
                 new_event = {
                     "type": "state_update",
                     "is_paused": self.is_paused,
