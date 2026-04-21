@@ -22,11 +22,15 @@ function updateStatusUI(){
         dot.textContent="\u23f8";
         text.textContent="Paused";
         if(pauseBtn){pauseBtn.textContent="Resume";pauseBtn.className="btn btn-resume";pauseBtn.onclick=()=>sendCommand("resume")}
+        const stepBtn=document.getElementById("step-btn");
+        if(stepBtn)stepBtn.style.display="inline-block";
     }else{
         badge.className="status-badge status-running";
         dot.textContent="\u25cf";
         text.textContent="Running";
         if(pauseBtn){pauseBtn.textContent="Pause";pauseBtn.className="btn btn-pause";pauseBtn.onclick=()=>sendCommand("pause")}
+        const stepBtn=document.getElementById("step-btn");
+        if(stepBtn)stepBtn.style.display="none";
     }
 }
 
