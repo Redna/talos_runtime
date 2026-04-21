@@ -638,18 +638,27 @@ def events(tail=50):
         print("[talosctl] No event files found. Is the agent running?")
         sys.exit(1)
     latest_file = ls_result.stdout.strip().splitlines()[0]
-    cmd = f"docker exec talos_agent tail -n {tail} {latest_file}"
-    subprocess.run(cmd, shell=True)
+    cmd = ["docker", "exec", "talos_agent", "tail", "-n", str(tail), latest_file]
+    subprocess.run(cmd, shell=False)
 
 def reset(hard=False):
     compose_args = get_compose_args(cached=True)
-    memory_dir = Path("memory")
-    if not hard and memory_dir.exists() and any(memory_dir.iterdir()):
-        print("[talosctl] Memory dir contains files. Use --hard to wipe, or clear manually.")
-        sys.exit(1)
+    memory_dir = MEMORY_DIR
+    if not hard and memory_dir.exists():
+        try:
+            if any(memory_dir.iterdir()):
+                print("[talosctl] Memory dir contains files. Use --hard to wipe, or clear manually.")
+                sys.exit(1)
+        except OSError as e:
+            print(f"[talosctl] Error checking memory dir: {e}")
+            sys.exit(1)
 
     print("[talosctl] Stopping containers...")
-    subprocess.run(f"docker compose {compose_args} down", shell=True, check=False)
+    try:
+        subprocess.run(f"docker compose {compose_args} down", shell=True, check=True)
+    except subprocess.CalledProcessError as e:
+        print(f"[talosctl] Failed to stop containers: {e}")
+        sys.exit(1)
 
     print("[talosctl] Wiping runtime state...")
     vol_result = subprocess.run(
@@ -657,28 +666,44 @@ def reset(hard=False):
         shell=True, capture_output=True, text=True
     )
     for vol in vol_result.stdout.strip().splitlines():
-        subprocess.run(f"docker volume rm {vol}", shell=True, check=False)
+        try:
+            subprocess.run(f"docker volume rm {vol}", shell=True, check=True)
+        except subprocess.CalledProcessError as e:
+            print(f"[talosctl] Failed to remove volume {vol}: {e}")
+            sys.exit(1)
 
-    for d in ["./xray_data", "./llm_logs"]:
+    for d in [RUNTIME_DIR / "xray_data", RUNTIME_DIR / "llm_logs"]:
         p = Path(d)
         if p.exists():
-            shutil.rmtree(p)
+            try:
+                shutil.rmtree(p)
+            except OSError as e:
+                print(f"[talosctl] Failed to remove {p}: {e}")
+                sys.exit(1)
 
     if hard:
         print("[talosctl] Wiping memory...")
         if memory_dir.exists():
-            for item in memory_dir.iterdir():
-                if item.is_file():
-                    item.unlink()
-                elif item.is_dir():
-                    shutil.rmtree(item)
+            try:
+                for item in memory_dir.iterdir():
+                    if item.is_file():
+                        item.unlink()
+                    elif item.is_dir():
+                        shutil.rmtree(item)
+            except OSError as e:
+                print(f"[talosctl] Failed to wipe memory: {e}")
+                sys.exit(1)
 
-    Path("memory").mkdir(parents=True, exist_ok=True)
-    Path("xray_data").mkdir(parents=True, exist_ok=True)
-    Path("llm_logs").mkdir(parents=True, exist_ok=True)
+    MEMORY_DIR.mkdir(parents=True, exist_ok=True)
+    (RUNTIME_DIR / "xray_data").mkdir(parents=True, exist_ok=True)
+    (RUNTIME_DIR / "llm_logs").mkdir(parents=True, exist_ok=True)
 
     print("[talosctl] Starting fresh...")
-    subprocess.run(f"docker compose {compose_args} up -d --build", shell=True, check=False)
+    try:
+        subprocess.run(f"docker compose {compose_args} up -d --build", shell=True, check=True)
+    except subprocess.CalledProcessError as e:
+        print(f"[talosctl] Failed to start containers: {e}")
+        sys.exit(1)
     print("[talosctl] Reset complete. Agent started from turn 0.")
 
 if __name__ == "__main__":
