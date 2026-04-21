@@ -11,6 +11,21 @@ import json
 import urllib.request
 from pathlib import Path
 
+# --- API Helpers ---
+def _send_api_command(cmd):
+    url = "http://localhost:4040/api/command"
+    try:
+        req = urllib.request.Request(
+            url,
+            data=json.dumps({"command": cmd}).encode(),
+            headers={"Content-Type": "application/json"},
+        )
+        urllib.request.urlopen(req, timeout=10)
+        return True
+    except Exception as e:
+        print(f"Error sending command '{cmd}': {e}", file=sys.stderr)
+        return False
+
 # --- Configuration ---
 RUNTIME_DIR = Path(__file__).parent.resolve()
 ROOT = RUNTIME_DIR.parent
@@ -596,9 +611,15 @@ def status():
     else:
         print("Watchdog: not running")
 
+def pause():
+    if _send_api_command("pause"):
+        print("Agent paused.")
+    else:
+        sys.exit(1)
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("command", choices=["start", "stop", "logs", "monitor", "status", "daemon"])
+    parser.add_argument("command", choices=["start", "stop", "logs", "monitor", "status", "daemon", "pause"])
     args = parser.parse_args()
     if args.command == "start": start()
     elif args.command == "stop": stop()
@@ -606,3 +627,4 @@ if __name__ == "__main__":
     elif args.command == "monitor": monitor()
     elif args.command == "status": status()
     elif args.command == "daemon": run_daemon()
+    elif args.command == "pause": pause()
