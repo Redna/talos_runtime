@@ -468,7 +468,7 @@ async def chat_completions(request: Request, background_tasks: BackgroundTasks):
                             }
                         )
                     ),
-                    turn=None,
+                    turn=body.get("turn"),
                 )
                 background_tasks.add_task(
                     log_completion,
