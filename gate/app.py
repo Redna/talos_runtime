@@ -61,13 +61,22 @@ class MessageTraceWriter:
 
     @staticmethod
     def _fingerprint(msg: dict) -> str:
-        # Dedup key based on role, content, and tool calls
+        # Dedup key based on role, content, and tool calls (ignoring IDs which vary per generation)
+        tool_sigs = []
+        for tc in msg.get("tool_calls", []):
+            func = tc.get("function", {})
+            tool_sigs.append(
+                {
+                    "name": func.get("name", ""),
+                    "args": func.get("arguments", ""),
+                }
+            )
         parts = [
             msg.get("role", ""),
             msg.get("content", ""),
-            json.dumps(msg.get("tool_calls", []), sort_keys=True),
             msg.get("tool_call_id", ""),
             msg.get("reasoning", ""),
+            json.dumps(tool_sigs, sort_keys=True),
         ]
         return json.dumps(parts, sort_keys=True)
 
@@ -128,6 +137,8 @@ class MessageTraceWriter:
             turn = self._trace_turn
 
         for msg in request_messages:
+            if "_turn" in msg:
+                continue
             fp = self._fingerprint(msg)
             if fp in self._written_fingerprints:
                 continue
@@ -528,7 +539,7 @@ async def chat_completions(request: Request, background_tasks: BackgroundTasks):
                 _trace_writer.write_messages(
                     body.get("messages", []),
                     resp_json.get("choices", [{}])[0].get("message", {}),
-                    turn=None,
+                    turn=body.get("turn"),
                 )
                 return resp_json
         except (httpx.ConnectError, httpx.TimeoutException, httpx.HTTPStatusError) as e:

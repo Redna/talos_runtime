@@ -295,9 +295,11 @@ function buildTurns(messages){
       turns.push({type:"user",messages:[m]});i++;continue;
     }
     if(role==="assistant"){
+      var turnNum=m._turn||"";
       var turn={type:"assistant",assistant:m,toolResults:[]};
       i++;
-      while(i<messages.length&&messages[i].role==="tool"){
+      // Collect all subsequent tool results with SAME _turn
+      while(i<messages.length&&messages[i].role==="tool"&&messages[i]._turn===turnNum){
         turn.toolResults.push(messages[i]);i++;
       }
       turns.push(turn);continue;
