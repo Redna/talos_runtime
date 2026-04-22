@@ -198,6 +198,7 @@ async function sendCommand(cmd){
         updateStepButton();
     }
     await fetch("/api/command",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({command:cmd})})
+}
 
 function setupScrollPause(){
   const el=document.getElementById("transcript");if(!el)return;
@@ -312,7 +313,8 @@ function buildTurns(messages){
 }
 
 function appendTurn(transcript,turn){
-  if(turn.type==="system"||turn.type==="user"||turn.type==="other"){
+  if(turn.type==="system"){return;} // Skip constitution system prompt
+  if(turn.type==="user"||turn.type==="other"){
     var m=turn.messages[0];var role=m.role||"unknown";
     var content=typeof m.content==="string"?m.content:(m.content!=null?JSON.stringify(m.content):"");
     var div=document.createElement("div");div.className="msg msg-"+role;

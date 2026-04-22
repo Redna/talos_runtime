@@ -45,7 +45,7 @@ PRICING_CACHE: Dict[str, Dict[str, float]] = {}
 class MessageTraceWriter:
     def __init__(self, data_dir: Path):
         self.data_dir = Path(data_dir) / "messages"
-        self._last_written_count = 0
+        self._written_fingerprints: set[str] = set()
         self._trace_turn = 0
         self._current_date = ""
         self._file = None
@@ -58,6 +58,18 @@ class MessageTraceWriter:
             self.data_dir.mkdir(parents=True, exist_ok=True)
             self._file = open(self.data_dir / f"{today}.jsonl", "a", encoding="utf-8")
             self._current_date = today
+
+    @staticmethod
+    def _fingerprint(msg: dict) -> str:
+        # Dedup key based on role, content, and tool calls
+        parts = [
+            msg.get("role", ""),
+            msg.get("content", ""),
+            json.dumps(msg.get("tool_calls", []), sort_keys=True),
+            msg.get("tool_call_id", ""),
+            msg.get("reasoning", ""),
+        ]
+        return json.dumps(parts, sort_keys=True)
 
     def _normalize_content(self, message: dict) -> dict:
         content = message.get("content", "")
@@ -115,16 +127,23 @@ class MessageTraceWriter:
             self._trace_turn += 1
             turn = self._trace_turn
 
-        for msg in request_messages[self._last_written_count :]:
+        for msg in request_messages:
+            fp = self._fingerprint(msg)
+            if fp in self._written_fingerprints:
+                continue
             line = {**msg, "_ts": ts, "_turn": turn}
             self._file.write(json.dumps(line, default=str) + "\n")
+            self._written_fingerprints.add(fp)
 
-        self._last_written_count = len(request_messages)
-
-        normalized = self._normalize_content(response_message)
-        normalized = self._normalize_tool_calls(normalized)
-        resp_line = {**normalized, "_ts": ts, "_turn": turn}
-        self._file.write(json.dumps(resp_line, default=str) + "\n")
+        resp_fp = self._fingerprint(response_message)
+        if resp_fp not in self._written_fingerprints:
+            normalized = self._normalize_content(response_message)
+            normalized = self._normalize_tool_calls(normalized)
+            line = {**normalized, "_ts": ts, "_turn": turn}
+            if "role" not in line:
+                line["role"] = "assistant"
+            self._file.write(json.dumps(line, default=str) + "\n")
+            self._written_fingerprints.add(resp_fp)
         self._file.flush()
 
     def close(self):
