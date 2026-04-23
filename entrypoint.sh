@@ -6,6 +6,7 @@ GIT_REPO=https://x-access-token:${GITHUB_TOKEN}@github.com/Redna/talos.git
 GIT_BRANCH=feat/talos
 
 git config --global --add safe.directory '*'
+git config --system --add safe.directory '*' 2>/dev/null || true
 git config --global user.name "Talos"
 git config --global user.email "talos@agent.local"
 
@@ -30,7 +31,8 @@ else
 fi
 
 echo "[Entrypoint] Branch: $(git -C /app rev-parse --abbrev-ref HEAD)"
-echo "[Entrypoint] Commit: $(git -C /app rev-parse HEAD)"
+COMMIT=$(git -C /app rev-parse HEAD)
+echo "[Entrypoint] Commit: $COMMIT"
 
 echo "Restoring authoritative spine files..."
 cp -a /spine_backup/. /app/spine/
@@ -40,9 +42,11 @@ chown -R "$USER_NAME":"$GROUP_ID" /memory
 mkdir -p /spine/events /spine/trajectories
 chown -R "$USER_NAME":"$GROUP_ID" /spine/events /spine/trajectories
 
+echo "$COMMIT" > /spine/last_good_commit
+echo "[Entrypoint] Recorded good commit: $COMMIT"
+
 sudo -u "$USER_NAME" -H git config --global user.name "Talos"
 sudo -u "$USER_NAME" -H git config --global user.email "talos@agent.local"
-sudo -u "$USER_NAME" -H git config --global --add safe.directory /app
 
 if [ -n "$GITHUB_TOKEN" ]; then
     echo "https://x-access-token:${GITHUB_TOKEN}@github.com" > /tmp/git_credentials
@@ -77,9 +81,6 @@ if [ ! -S /tmp/spine.sock ]; then
   echo "ERROR: Spine socket not available after 30 seconds"
   exit 1
 fi
-
-git -C /app rev-parse HEAD > /spine/last_good_commit
-echo "[Entrypoint] Recorded good commit: $(cat /spine/last_good_commit)"
 
 echo "Awaking Talos as $USER_NAME ($USER_ID:$GROUP_ID)..."
 echo "[Entrypoint] Spine managing Cortex lifecycle. Waiting for Spine process..."
