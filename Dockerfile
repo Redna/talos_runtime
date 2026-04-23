@@ -49,7 +49,7 @@ RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --frozen --no-dev --no-progress
 
 # 4a. Preserve pristine spine files (restored on each startup to prevent cortex corruption)
-RUN cp -a /app/spine /spine_pristine
+RUN cp -a /app/spine /spine_backup
 
 # 4. Add runtime scripts (Hardened)
 COPY talos_runtime/scripts/ /runtime_scripts/
