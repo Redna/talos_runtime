@@ -137,6 +137,12 @@ def cmd_reset(args: argparse.Namespace) -> None:
         capture_output=True,
     )
 
+    print("Wiping app volume...")
+    subprocess.run(
+        ["docker", "volume", "rm", "-f", "talos_runtime_talos_app"],
+        capture_output=True,
+    )
+
     print("Cleaning local xray_data / llm_logs...")
     for d in ("xray_data", "llm_logs"):
         p = Path(d)

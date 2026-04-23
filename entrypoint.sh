@@ -1,6 +1,13 @@
 #!/bin/bash
 
+export HOME=/root
+
+GIT_REPO=https://x-access-token:${GITHUB_TOKEN}@github.com/Redna/talos.git
+GIT_BRANCH=feat/talos
+
 git config --global --add safe.directory '*'
+git config --global user.name "Talos"
+git config --global user.email "talos@agent.local"
 
 USER_ID=${PUID:-1000}
 GROUP_ID=${PGID:-1000}
@@ -10,33 +17,20 @@ if ! getent passwd "$USER_ID" > /dev/null 2>&1; then useradd -u "$USER_ID" -g "$
 
 USER_NAME=$(getent passwd "$USER_ID" | cut -d: -f1)
 
-GIT_REMOTE=origin
-GIT_BRANCH=feat/talos
-
-cd /app
-
-echo "gitdir: /runtime_git" > /app/.git
-if grep -q 'worktree = ' /runtime_git/config 2>/dev/null; then
-    sed -i 's|worktree = .*|worktree = /app|' /runtime_git/config
-fi
-
-if git ls-remote --exit-code "$GIT_REMOTE" "$GIT_BRANCH" > /dev/null 2>&1; then
-    echo "[Entrypoint] Branch $GIT_BRANCH exists on $GIT_REMOTE, pulling latest..."
-    git fetch "$GIT_REMOTE" "$GIT_BRANCH"
+if [ -d /app/.git ]; then
+    echo "[Entrypoint] Existing repo found, pulling latest..."
+    cd /app
+    git fetch origin "$GIT_BRANCH"
     git checkout "$GIT_BRANCH"
-    git reset --hard "$GIT_REMOTE/$GIT_BRANCH"
-    if [ -n "$(git status --porcelain)" ]; then
-        echo "[Entrypoint] Reverting uncommitted changes..."
-        git checkout -- .
-    fi
+    git reset --hard "origin/$GIT_BRANCH"
 else
-    echo "[Entrypoint] Branch $GIT_BRANCH does not exist on $GIT_REMOTE, creating..."
-    git checkout -b "$GIT_BRANCH"
-    git push -u "$GIT_REMOTE" "$GIT_BRANCH" || echo "[Entrypoint] Warning: failed to push $GIT_BRANCH, will retry on next startup"
+    echo "[Entrypoint] Fresh volume, cloning repo..."
+    rm -rf /app/.[!.]* /app/* 2>/dev/null
+    git clone -b "$GIT_BRANCH" "$GIT_REPO" /app
 fi
 
-echo "[Entrypoint] Current branch: $(git rev-parse --abbrev-ref HEAD)"
-echo "[Entrypoint] Current commit: $(git rev-parse HEAD)"
+echo "[Entrypoint] Branch: $(git -C /app rev-parse --abbrev-ref HEAD)"
+echo "[Entrypoint] Commit: $(git -C /app rev-parse HEAD)"
 
 echo "Restoring authoritative spine files..."
 cp -a /spine_backup/. /app/spine/
@@ -46,7 +40,6 @@ chown -R "$USER_NAME":"$GROUP_ID" /memory
 mkdir -p /spine/events /spine/trajectories
 chown -R "$USER_NAME":"$GROUP_ID" /spine/events /spine/trajectories
 
-git config --global --add safe.directory /app
 sudo -u "$USER_NAME" -H git config --global user.name "Talos"
 sudo -u "$USER_NAME" -H git config --global user.email "talos@agent.local"
 sudo -u "$USER_NAME" -H git config --global --add safe.directory /app
@@ -58,7 +51,7 @@ if [ -n "$GITHUB_TOKEN" ]; then
 fi
 
 if [ -f "/runtime_scripts/setup_hooks.sh" ]; then
-    cd /app && /bin/bash /runtime_scripts/setup_hooks.sh
+    /bin/bash /runtime_scripts/setup_hooks.sh
 fi
 
 echo "Locking down semantic firewall and git hooks..."
@@ -85,10 +78,8 @@ if [ ! -S /tmp/spine.sock ]; then
   exit 1
 fi
 
-if git -C /app rev-parse HEAD > /dev/null 2>&1; then
-  git -C /app rev-parse HEAD > /spine/last_candidate_commit
-  echo "[Entrypoint] Recorded candidate commit"
-fi
+git -C /app rev-parse HEAD > /spine/last_good_commit
+echo "[Entrypoint] Recorded good commit: $(cat /spine/last_good_commit)"
 
 echo "Awaking Talos as $USER_NAME ($USER_ID:$GROUP_ID)..."
 echo "[Entrypoint] Spine managing Cortex lifecycle. Waiting for Spine process..."

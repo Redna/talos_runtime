@@ -5,7 +5,7 @@ services:
       dockerfile: talos_runtime/Dockerfile
     container_name: talos_agent
     security_opt:
-      - seccomp=unconfined
+      - seccomp:unconfined
     env_file: .env
     environment:
       - TALOS_REPO_DIR=/app
@@ -22,9 +22,9 @@ services:
       - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID:-0}
       - TALOS_MODEL=${TALOS_MODEL:-}
     volumes:
+      - talos_app:/app
       - ./memory:/memory
       - spine_observability:/spine
-      - ./.git/modules/talos:/runtime_git
       - ./spine_config.json:/spine/spine_config.json:ro
     networks:
       - talos_net
@@ -91,7 +91,7 @@ services:
     cap_add:
       - SYS_PTRACE
     security_opt:
-      - seccomp=unconfined
+      - seccomp:unconfined
     ipc: host
     volumes:
       - ./models:/models
@@ -126,3 +126,4 @@ networks:
 
 volumes:
   spine_observability:
+  talos_app:
