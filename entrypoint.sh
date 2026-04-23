@@ -38,7 +38,8 @@ fi
 echo "[Entrypoint] Current branch: $(git rev-parse --abbrev-ref HEAD)"
 echo "[Entrypoint] Current commit: $(git rev-parse HEAD)"
 
-: "spine_backup removed — git-pulled code is authoritative (see Dockerfile)"
+echo "Restoring authoritative spine files..."
+cp -a /spine_backup/. /app/spine/
 
 chown -R "$USER_NAME":"$GROUP_ID" /app
 chown -R "$USER_NAME":"$GROUP_ID" /memory
