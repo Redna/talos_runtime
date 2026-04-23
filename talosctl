@@ -641,14 +641,17 @@ def events(tail=50):
     cmd = ["docker", "exec", "talos_agent", "tail", "-n", str(tail), latest_file]
     subprocess.run(cmd, shell=False)
 
-def reset(hard=False):
+def reset(hard=False, preserve=False):
     compose_args = get_compose_args(cached=True)
     memory_dir = MEMORY_DIR
-    if not hard and memory_dir.exists():
+    if not hard and not preserve and memory_dir.exists():
         try:
             if any(memory_dir.iterdir()):
-                print("[talosctl] Memory dir contains files. Use --hard to wipe, or clear manually.")
+                print("[talosctl] Memory dir contains files. Use --hard to wipe, or --preserve to keep.")
                 sys.exit(1)
+        except OSError as e:
+            print(f"[talosctl] Error checking memory dir: {e}")
+            sys.exit(1)
         except OSError as e:
             print(f"[talosctl] Error checking memory dir: {e}")
             sys.exit(1)
@@ -661,16 +664,17 @@ def reset(hard=False):
         sys.exit(1)
 
     print("[talosctl] Wiping runtime state...")
-    vol_result = subprocess.run(
-        "docker volume ls -q -f name=spine_observability",
-        shell=True, capture_output=True, text=True
-    )
-    for vol in vol_result.stdout.strip().splitlines():
-        try:
-            subprocess.run(f"docker volume rm {vol}", shell=True, check=True)
-        except subprocess.CalledProcessError as e:
-            print(f"[talosctl] Failed to remove volume {vol}: {e}")
-            sys.exit(1)
+    for vol_name in ("spine_observability", "talos_app"):
+        vol_result = subprocess.run(
+            f"docker volume ls -q -f name={vol_name}",
+            shell=True, capture_output=True, text=True
+        )
+        for vol in vol_result.stdout.strip().splitlines():
+            if vol:
+                try:
+                    subprocess.run(f"docker volume rm -f {vol}", shell=True, check=True)
+                except subprocess.CalledProcessError as e:
+                    print(f"[talosctl] Failed to remove volume {vol}: {e}")
 
     for d in [RUNTIME_DIR / "xray_data", RUNTIME_DIR / "llm_logs"]:
         p = Path(d)
@@ -704,7 +708,7 @@ def reset(hard=False):
 
     print("[talosctl] Starting fresh...")
     try:
-        subprocess.run(f"docker compose {compose_args} up -d --build", shell=True, cwd=str(RUNTIME_DIR), check=True)
+        subprocess.run(f"docker compose {compose_args} up -d --build talos xray", shell=True, cwd=str(RUNTIME_DIR), check=True)
     except subprocess.CalledProcessError as e:
         print(f"[talosctl] Failed to start containers: {e}")
         sys.exit(1)
@@ -729,6 +733,7 @@ if __name__ == "__main__":
 
     reset_parser = subparsers.add_parser("reset")
     reset_parser.add_argument("--hard", action="store_true", help="Also wipe ./memory/")
+    reset_parser.add_argument("--preserve", action="store_true", help="Preserve ./memory/ even if non-empty")
 
     args = parser.parse_args()
     if not args.command:
@@ -745,4 +750,4 @@ if __name__ == "__main__":
     elif args.command == "resume": resume()
     elif args.command == "step": step()
     elif args.command == "events": events(args.tail)
-    elif args.command == "reset": reset(args.hard)
+    elif args.command == "reset": reset(args.hard, args.preserve)
