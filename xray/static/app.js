@@ -236,14 +236,27 @@ function makeCollapsibleBody(text,div){
 }
 
 function renderAllMessages(messages){
-  if(messages.length>0)switchView('stream');
-  const transcript=document.getElementById("transcript");if(!transcript)return;
+  var transcript=document.getElementById("transcript");if(!transcript)return;
   transcript.innerHTML="";
-  currentTurnEl=null;
-  const turns=buildTurns(messages);
-  for(const turn of turns){
-    appendTurn(transcript,turn);
+  var turns=buildTurns(messages);
+  // Pin system prompt at top
+  for(var i=0;i<turns.length;i++){
+    if(turns[i].type==="system"){
+      var sysDiv=document.createElement("div");sysDiv.className="msg msg-system";
+      sysDiv.style.cssText="position:sticky;top:0;z-index:10;background:#1c2128;border-bottom:2px solid var(--border);margin-bottom:8px;";
+      var label=document.createElement("div");label.className="msg-label";label.textContent="system prompt (pinned)";
+      sysDiv.appendChild(label);
+      sysDiv.appendChild(makeCollapsibleBody(turns[i].messages[0].content||"",sysDiv));
+      transcript.appendChild(sysDiv);
+      turns.splice(i,1);
+      break;
+    }
   }
+  for(var i=0;i<turns.length;i++){
+    appendTurn(transcript,turns[i]);
+  }
+  maybeScroll(transcript);
+}
   maybeScroll(transcript);
 }
 
