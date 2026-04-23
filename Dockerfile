@@ -37,6 +37,9 @@ RUN ARCH=$(dpkg --print-architecture) && \
 # Install uv for fast package management
 RUN curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR="/usr/local/bin" sh
 
+# Allow git to work regardless of directory ownership (container runs as different users)
+RUN git config --system --add safe.directory '*'
+
 # 1. Cache dependencies (Layer is cached unless pyproject.toml/uv.lock changes)
 COPY talos_runtime/talos/pyproject.toml talos_runtime/talos/uv.lock ./
 RUN --mount=type=cache,target=/root/.cache/uv \
