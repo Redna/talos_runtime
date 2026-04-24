@@ -52,6 +52,14 @@ class XRayClient:
 
     def get_full_snapshot(self) -> dict:
         events = self._events if isinstance(self._events, list) else []
+        # If state hasn't been polled yet, force-read it now so the initial
+        # WebSocket snapshot isn't empty.
+        if not self._state and (self.spine_dir / "state.json").exists():
+            try:
+                with open(self.spine_dir / "state.json", "r", encoding="utf-8") as f:
+                    self._state = json.load(f)
+            except Exception:
+                pass
         return {
             "state": self._state,
             "events": events[-200:],
