@@ -257,8 +257,6 @@ function renderAllMessages(messages){
   }
   maybeScroll(transcript);
 }
-  maybeScroll(transcript);
-}
 
 function appendMessage(msg){
   const transcript=document.getElementById("transcript");if(!transcript)return;
