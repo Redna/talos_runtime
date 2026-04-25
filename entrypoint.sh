@@ -30,6 +30,16 @@ else
     git clone -b "$GIT_BRANCH" "$GIT_REPO" /app
 fi
 
+# Derive the volatile branch name from the seed (defaults to feat/talos)
+VOLATILE_BRANCH=${VOLATILE_BRANCH:-feat/talos}
+echo "[Entrypoint] Establishing local volatile branch: $VOLATILE_BRANCH"
+cd /app
+if git rev-parse --verify "$VOLATILE_BRANCH" > /dev/null 2>&1; then
+    git checkout "$VOLATILE_BRANCH"
+else
+    git checkout -b "$VOLATILE_BRANCH"
+fi
+
 echo "[Entrypoint] Branch: $(git -C /app rev-parse --abbrev-ref HEAD)"
 COMMIT=$(git -C /app rev-parse HEAD)
 echo "[Entrypoint] Commit: $COMMIT"
