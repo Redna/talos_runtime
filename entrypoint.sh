@@ -3,7 +3,7 @@
 export HOME=/root
 
 GIT_REPO=https://x-access-token:${GITHUB_TOKEN}@github.com/Redna/talos.git
-GIT_BRANCH=feat/talos
+GIT_BRANCH=feat/talos-next
 
 git config --global --add safe.directory '*'
 git config --system --add safe.directory '*' 2>/dev/null || true
