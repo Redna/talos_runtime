@@ -48,6 +48,8 @@ echo "Restoring authoritative spine files..."
 cp -a /spine_backup/. /app/spine/
 
 chown -R "$USER_NAME":"$GROUP_ID" /app
+# Ensure /memory is writable by talos before chown
+chmod -R 777 /memory
 chown -R "$USER_NAME":"$GROUP_ID" /memory
 mkdir -p /spine/events /spine/trajectories
 chown -R "$USER_NAME":"$GROUP_ID" /spine/events /spine/trajectories
