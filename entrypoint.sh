@@ -34,8 +34,15 @@ fi
 VOLATILE_BRANCH=${VOLATILE_BRANCH:-feat/talos}
 echo "[Entrypoint] Establishing local volatile branch: $VOLATILE_BRANCH"
 cd /app
+
+# If this is a restart (existing repo), preserve the volatile branch pointer
+# but reset its working tree to the clean seed. This discards any
+# local agent modifications that may have corrupted the state, while
+# keeping the commit history on origin/feat/talos available for the
+# agent to pull later if needed.
 if git rev-parse --verify "$VOLATILE_BRANCH" > /dev/null 2>&1; then
-    git checkout "$VOLATILE_BRANCH"
+    git branch -D "$VOLATILE_BRANCH"
+    git checkout -b "$VOLATILE_BRANCH"
 else
     git checkout -b "$VOLATILE_BRANCH"
 fi
@@ -48,7 +55,8 @@ echo "Restoring authoritative spine files..."
 cp -a /spine_backup/. /app/spine/
 
 chown -R "$USER_NAME":"$GROUP_ID" /app
-# Ensure /memory is writable by talos before chown
+# Ensure /memory exists and is writable by talos before chown
+mkdir -p /memory
 chmod -R 777 /memory
 chown -R "$USER_NAME":"$GROUP_ID" /memory
 mkdir -p /spine/events /spine/trajectories
