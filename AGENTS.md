@@ -255,6 +255,60 @@ The user explicitly rejected prompt-engineering guards (startup guards, task inv
 | `talos_runtime` | `main` | `d633aef` | xray force-read fix |
 | `talos` | `feat/talos` | `30da709` | telegram fix, wake interrupt, auto-register chat_id |
 
+## Branching Strategy
+
+### tl;dr: Where commits go
+
+| Actor | Branch | Notes |
+|---|---|---|
+| **Redna** (human) | `talos_seed` in `talos/` submodule | Stable seed commits; also PRs to `main` in `talos_runtime/` |
+| **Talos** (agent) | `feat/talos` in `talos/` submodule | Volatile evolution; never force-push; auto-push via post-commit hook |
+
+### Talos Submodule (`talos/`)
+
+| Branch | Purpose | Protection |
+|---|---|---|
+| `main` | Stable base architecture. Merged from `talos_seed` via PRs. | Human merges only |
+| `talos_seed` | Minimal stable seed. Must include **all** fixes so the agent can start from scratch and evolve autonomously. | Redna authors commits here |
+| `feat/talos` | **Volatile** branch where Talos evolves freely. If issues are found, fix them here first, then cherry-pick/backport to `talos_seed`. | Talos authors commits here |
+| `feat/talos-experiment` | Archive of historical agent evolution (256 commits). Kept for reference. | Read-only |
+
+> **Rule:** If a fix is required in `feat/talos`, always check if the same fix needs to be applied to `talos_seed`.
+
+### Runtime Superproject (`talos_runtime/`)
+
+| Branch | Purpose | Protection |
+|---|---|---|
+| `main` | Stable infrastructure. Merged via PRs. | Human merges only |
+| `feat/talos-next` | Working branch for infrastructure changes (entrypoint, compose, scripts, xray, gate). | Redna authors commits here |
+
+> The container clones/pulls `talos_seed`, so the agent always starts from the clean stable seed.
+
+### Post-Commit Hook Setup
+
+The agent's container installs a post-commit hook that pushes commits. The default branch is set in `scripts/setup_hooks.sh`:
+
+```bash
+GIT_BRANCH=${GIT_BRANCH:-feat/talos}
+```
+
+Override at runtime with:
+```bash
+export GIT_BRANCH=feat/talos-experiment
+```
+
+## Commit Authorship
+
+| Location | Git `user.name` | Git `user.email` | Purpose |
+|---|---|---|---|
+| Host (Redna) | `Redna` | `gruhl.alexander@gmail.com` | Human-authored commits in `talos_seed`, runtime PRs |
+| Container (Talos) | `Talos` | `talos@agent.local` | Agent-authored commits in `feat/talos` |
+
+**Never mix authorship.** If you (Redna) commit inside the container, override temporarily:
+```bash
+git -C talos -c user.name="Redna" -c user.email="gruhl.alexander@gmail.com" commit -m "fix: ..."
+```
+
 ## Session Handover
 
 ### Current State (as of 2026-04-24)
