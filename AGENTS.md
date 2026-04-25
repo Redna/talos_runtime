@@ -51,7 +51,7 @@ talos_runtime/                  ← This repo (infrastructure)
 
 ## Repository Boundaries
 
-This repo (`talos_runtime`) is the **infrastructure**. It owns Docker containers, networking, volumes, the Gate proxy, the X-ray dashboard, the watchdog CLI (`talosctl`), all Docker/Docker Compose definitions, and the `talos/` submodule pointer. The `talos/` **submodule** (`feat/talos` branch) is the **agent source code** — it owns `spine/`, `cortex/`, `CONSTITUTION.md`, `identity.md`, and `tests/`.
+This repo (`talos_runtime`) is the **infrastructure**. It owns Docker containers, networking, volumes, the Gate proxy, the X-ray dashboard, the watchdog CLI (`talosctl`), all Docker/Docker Compose definitions, and the `talos/` submodule pointer. The `talos/` **submodule** (`talos_seed` branch) is the **agent source code** — it owns `spine/`, `cortex/`, `CONSTITUTION.md`, `identity.md`, and `tests/`.
 
 | Concern | Goes in | How to change | How to persist |
 |---|---|---|---|
@@ -91,11 +91,15 @@ python3 -m pytest tests/ -v
 
 ### 4. Commit and push the submodule
 
+Human fixes belong on `talos_seed`. After fixing, fast-forward `feat/talos` from the seed so the agent inherits the fix on next restart.
+
 ```bash
 cd talos
 git add -A
-git commit -m "fix(scope): one-line description"
-git push origin feat/talos
+git -c user.name="Redna" -c user.email="gruhl.alexander@gmail.com" commit -m "fix(scope): one-line description"
+git push origin talos_seed
+# Propagate fix to the volatile branch:
+git checkout feat/talos && git merge talos_seed && git push origin feat/talos
 ```
 
 ### 5. Bump the submodule pointer in `talos_runtime`
@@ -253,7 +257,7 @@ The user explicitly rejected prompt-engineering guards (startup guards, task inv
 | Repository | Branch | Commit | Description |
 |---|---|---|---|
 | `talos_runtime` | `main` | `d633aef` | xray force-read fix |
-| `talos` | `feat/talos` | `30da709` | telegram fix, wake interrupt, auto-register chat_id |
+| `talos` | `talos_seed` | `531f166` | stable seed + fixes (auto-fold, Telegram, hook guard, SIGKILL) |
 
 ## Branching Strategy
 
@@ -297,6 +301,21 @@ Override at runtime with:
 export GIT_BRANCH=feat/talos-experiment
 ```
 
+### Container Branch Mechanism (Entrypoint)
+
+On every startup, `entrypoint.sh` performs these steps:
+
+1. Clones `talos_seed` into `/app`
+2. Creates a local volatile branch: `git checkout -b feat/talos`
+3. Installs post-commit hooks that push to `origin/feat/talos`
+
+This guarantees the container:
+- **Always starts from the clean stable seed** (`talos_seed`)
+- **Evolves on the volatile branch** (`feat/talos`)
+- **Never modifies the seed** directly
+
+When the agent calls `request_restart`, the Spine kills Cortex, clones the latest `talos_seed`, recreates `feat/talos`, and replays any local commits. The agent effectively "resets" to seed but keeps its evolution history on `origin/feat/talos`.
+
 ## Commit Authorship
 
 | Location | Git `user.name` | Git `user.email` | Purpose |
@@ -311,23 +330,26 @@ git -C talos -c user.name="Redna" -c user.email="gruhl.alexander@gmail.com" comm
 
 ## Session Handover
 
-### Current State (as of 2026-04-24)
+### Current State (as of 2026-04-25)
 
-- **Turn**: 7
-- **Context**: 8.87%
-- **Focus**: "External Impact Synthesis: Transitioning from internal optimization to high-order external problem solving."
-- **Status**: Running
-- **Memory files**: 7 (`epoch_v_manifesto.md`, `metabolic_tuning.md`, `sovereign_audit_final.md`, `sovereign_continuity.md`, `sovereign_dashboard.md`, `world_external.md`, `world_model.md`)
+- **Branch model**: Fully implemented and tested. `talos_seed` is clean stable seed; `feat/talos` is volatile evolution.
+- **Test suite**: 40 passed on `talos_seed`
+- **Authorship**: Host = Redna, Container = Talos
+- **Status**: Container stopped for analysis of `/memory` permission issue
 
 ### Verified Observations
-1. **X-ray dashboard** is accessible at `http://localhost:4040`. A JS syntax error (duplicate closing brace in `renderAllMessages`) was fixed. Dashboard now renders state correctly.
-2. **Spine is making LLM calls** repeatedly (log shows `v1/chat/completions` POSTs succeeding to Ollama).
-3. **Telegram integration** fixed: `chat_id=0` is now supported, poller starts immediately, incoming messages auto-register the chat ID, pause/wake works via `.wake` sentinel.
-4. **No crashes** in the watchdog or lazarus protocol during this session.
+1. **Test commit** (from container as Talos) successfully pushed to `origin/feat/talos`
+2. **`talos_seed` untouched** — ancestor check passes
+3. **X-ray dashboard** running on `http://localhost:4040`
+4. **All branches** correctly created and pushed:
+   - `talos_seed` → clean stable seed (23 commits, Redna authored)
+   - `feat/talos` → volatile evolution (2 test commits so far, Talos authored)
+   - `feat/talos-experiment` → historical archive (256 commits)
 
 ### What We Did NOT Do (Pending)
-1. Monitor overnight run for stability
-2. Agent is working on autonomous evolution — no human intervention needed
+1. Fix `/memory` write permission issue (cortex crashes on startup trying to write `.agent_state.json`)
+2. Monitor overnight run for stability
+3. Verify agent's first autonomous commit on `feat/talos` (not our test commits)
 
 ### How to Continue in Next Session
 
@@ -364,10 +386,15 @@ curl -s http://localhost:4040/api/state | python3 -m json.tool
 git push origin feat/talos
 ```
 
-Then update the submodule pointer in `talos_runtime`:
+> The container auto-pushes to `origin/feat/talos` via post-commit hook. Manual push is only needed if the hook failed.
+
+**To update the submodule pointer in `talos_runtime` to the latest stable seed:**
 ```bash
-cd talos
-git pull origin feat/talos
+git checkout talos
+git checkout talos_seed
+git pull origin talos_seed
 cd ..
-git add talos && git commit -m "chore: bump talos submodule"
+git add talos && git commit -m "chore: bump talos submodule to $(git -C talos rev-parse --short HEAD)"
 ```
+
+> Only bump the submodule pointer when the stable seed has new fixes. The agent's volatile commits on `feat/talos` do not require host-side pointer updates.
