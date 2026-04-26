@@ -207,6 +207,11 @@ function setupScrollPause(){
 
 function maybeScroll(el){if(autoScroll)el.scrollTop=el.scrollHeight}
 
+function formatTimestamp(ts){
+  if(!ts)return"";
+  return ts.substring(0,19).replace("T"," ");
+}
+
 function formatArgs(argsStr){
   if(!argsStr)return"";
   let parsed=argsStr;
@@ -276,50 +281,99 @@ function appendMessage(msg){
   }
 
   const turn={type:role,messages:[msg]};
+  // System and user prompts always belong at the top of the stream
+  if(role==="system"||role==="user"){
+    const existing=Array.from(transcript.querySelectorAll('.msg-'+role));
+    if(existing.length>0){
+      // Replace the existing pinned prompt so only the latest shows
+      existing[existing.length-1].remove();
+    }
+    appendTurn(transcript,turn);
+    // Move the newly appended element to the top
+    const inserted=transcript.lastElementChild;
+    if(inserted&&transcript.firstChild!==inserted){
+      transcript.insertBefore(inserted,transcript.firstChild);
+    }
+    maybeScroll(transcript);
+    return;
+  }
+
   appendTurn(transcript,turn);
   maybeScroll(transcript);
 }
 
 function buildTurns(messages){
+  // Sort by timestamp so the conversation is chronological
+  var sorted=messages.slice().sort(function(a,b){
+    var ta=a._ts||"", tb=b._ts||"";
+    if(ta<tb)return -1;
+    if(ta>tb)return 1;
+    return 0;
+  });
+
+  // Find most recent system and user prompts (they belong at the top)
+  var lastSystem=null, lastUser=null;
+  for(var i=sorted.length-1;i>=0;i--){
+    if(!lastSystem&&sorted[i].role==="system")lastSystem=sorted[i];
+    if(!lastUser&&sorted[i].role==="user")lastUser=sorted[i];
+    if(lastSystem&&lastUser)break;
+  }
+
+  // Remove them from the chronological stream so they don't appear twice
+  var body=sorted.filter(function(m){return m!==lastSystem&&m!==lastUser;});
+
   var turns=[];
-  var i=0;
-  while(i<messages.length){
-    var m=messages[i];
+  var j=0;
+  while(j<body.length){
+    var m=body[j];
     var role=m.role||"unknown";
-    if(role==="system"){
-      turns.push({type:"system",messages:[m]});i++;continue;
-    }
-    if(role==="user"){
-      turns.push({type:"user",messages:[m]});i++;continue;
-    }
     if(role==="assistant"){
       var turnNum=m._turn||"";
       var turn={type:"assistant",assistant:m,toolResults:[]};
-      i++;
-      // Collect all subsequent tool results with SAME _turn
-      while(i<messages.length&&messages[i].role==="tool"&&messages[i]._turn===turnNum){
-        turn.toolResults.push(messages[i]);i++;
+      j++;
+      while(j<body.length&&body[j].role==="tool"&&body[j]._turn===turnNum){
+        turn.toolResults.push(body[j]);j++;
       }
       turns.push(turn);continue;
     }
     if(role==="tool"){
-      var turn={type:"orphan_tools",messages:[m]};i++;
-      while(i<messages.length&&messages[i].role==="tool"){turn.messages.push(messages[i]);i++;}
+      var turn={type:"orphan_tools",messages:[m]};j++;
+      while(j<body.length&&body[j].role==="tool"){turn.messages.push(body[j]);j++;}
       turns.push(turn);continue;
     }
-    turns.push({type:"other",messages:[m]});i++;
+    if(role==="system"||role==="user"){
+      turns.push({type:role,messages:[m]});j++;continue;
+    }
+    turns.push({type:"other",messages:[m]});j++;
   }
+
+  // Pin current system and user prompts at the very top
+  if(lastUser)turns.unshift({type:"user",messages:[lastUser]});
+  if(lastSystem)turns.unshift({type:"system",messages:[lastSystem]});
   return turns;
 }
 
 function appendTurn(transcript,turn){
-  if(turn.type==="system"){return;} // Skip constitution system prompt
+  if(turn.type==="system"){
+    var m=turn.messages[0];
+    var content=typeof m.content==="string"?m.content:(m.content!=null?JSON.stringify(m.content):"");
+    var div=document.createElement("div");div.className="msg msg-system";
+    var label=document.createElement("div");label.className="msg-label";
+    label.textContent="system";
+    if(m._ts)label.appendChild(document.createTextNode(" "));var tsSpan=document.createElement("span");tsSpan.className="msg-ts";tsSpan.textContent=formatTimestamp(m._ts);label.appendChild(tsSpan);
+    div.appendChild(label);
+    if(content)div.appendChild(makeCollapsibleBody(content,div));
+    transcript.appendChild(div);
+    return;
+  }
   if(turn.type==="user"||turn.type==="other"){
     var m=turn.messages[0];var role=m.role||"unknown";
     var content=typeof m.content==="string"?m.content:(m.content!=null?JSON.stringify(m.content):"");
     var div=document.createElement("div");div.className="msg msg-"+role;
     var label=document.createElement("div");label.className="msg-label";
-    label.textContent=role;div.appendChild(label);
+    label.textContent=role;
+    if(m._ts)label.appendChild(document.createTextNode(" "));var tsSpan=document.createElement("span");tsSpan.className="msg-ts";tsSpan.textContent=formatTimestamp(m._ts);label.appendChild(tsSpan);
+    div.appendChild(label);
     if(content)div.appendChild(makeCollapsibleBody(content,div));
     transcript.appendChild(div);
     return;
@@ -344,7 +398,9 @@ function appendTurn(transcript,turn){
   var turnDiv=document.createElement("div");turnDiv.className="turn";
 
   var asstDiv=document.createElement("div");asstDiv.className="msg msg-assistant";
-  var asstLabel=document.createElement("div");asstLabel.className="msg-label";asstLabel.textContent="assistant (turn "+(m._turn||"\u2014")+")";asstDiv.appendChild(asstLabel);
+  var asstLabel=document.createElement("div");asstLabel.className="msg-label";asstLabel.textContent="assistant (turn "+(m._turn||"\u2014")+")";
+  if(m._ts){var aTs=document.createElement("span");aTs.className="msg-ts";aTs.textContent=formatTimestamp(m._ts);asstLabel.appendChild(aTs);}
+  asstDiv.appendChild(asstLabel);
 
   if(reasoning){
     var thinkDiv=document.createElement("div");thinkDiv.className="msg msg-thinking collapsed";
@@ -422,6 +478,7 @@ function renderToolResult(m,tc){
   }
   var div=document.createElement("div");div.className="msg msg-tool";
   var label=document.createElement("div");label.className="msg-label";label.textContent=toolName;
+  if(m._ts){var tTs=document.createElement("span");tTs.className="msg-ts";tTs.textContent=formatTimestamp(m._ts);label.appendChild(tTs);}
   if(content.includes("[TOOL ERROR]")||content.includes("[EXIT 1]")){var failSpan=document.createElement("span");failSpan.className="fail";failSpan.textContent=" \u2717";label.appendChild(failSpan)}
   else{var okSpan=document.createElement("span");okSpan.className="ok";okSpan.textContent=" \u2713";label.appendChild(okSpan)}
   div.appendChild(label);
