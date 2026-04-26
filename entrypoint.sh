@@ -53,6 +53,8 @@ echo "[Entrypoint] Commit: $COMMIT"
 
 echo "Restoring authoritative spine files..."
 cp -a /spine_backup/. /app/spine/
+echo "Purging stale __pycache__..."
+rm -rf /app/spine/__pycache__/
 
 chown -R "$USER_NAME":"$GROUP_ID" /app
 # Ensure /memory exists and is writable by talos before chown

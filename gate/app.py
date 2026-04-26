@@ -409,7 +409,7 @@ async def chat_completions(request: Request, background_tasks: BackgroundTasks):
             body["reasoning_effort"] = "high"
 
     print(
-        f"[Gate] Forwarding to {backend_key}: model={body.get('model')} tool_choice={body.get('tool_choice')} tools={len(body.get('tools', []))} msgs={len(body.get('messages', []))}"
+        f"[Gate] Forwarding to {backend_key}: model={body.get('model')} tool_choice={body.get('tool_choice')} tools={len(body.get('tools') or [])} msgs={len(body.get('messages') or [])}"
     )
 
     if is_streaming:
