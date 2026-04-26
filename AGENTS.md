@@ -330,30 +330,33 @@ git -C talos -c user.name="Redna" -c user.email="gruhl.alexander@gmail.com" comm
 
 ## Session Handover
 
-### Current State (as of 2026-04-25)
+### Current State (as of 2026-04-26)
 
 - **Branch model**: Fully implemented and tested. `talos_seed` is clean stable seed; `feat/talos` is volatile evolution.
 - **Test suite**: 40 passed on `talos_seed`
 - **Authorship**: Host = Redna, Container = Talos
-- **Status**: Container running, both Spine and Cortex alive. Supervisor first-start bug fixed.
+- **Status**: Container running, spine + cortex alive, events flowing. Ready for overnight run.
 
 ### Verified Observations
 1. **Test commit** (from container as Talos) successfully pushed to `origin/feat/talos`
 2. **`talos_seed` untouched** — ancestor check passes
 3. **X-ray dashboard** running on `http://localhost:4040`
 4. **All branches** correctly created and pushed:
-   - `talos_seed` → clean stable seed (24 commits, Redna authored)
+   - `talos_seed` → clean stable seed (26 commits, Redna authored)
    - `feat/talos` → volatile evolution (inherits seed + agent commits, Talos authored)
    - `feat/talos-experiment` → historical archive (256 commits)
 5. **Container health verified**:
-   - Spine: running (PID 66), IPC socket responsive
-   - Cortex: running, communicating with spine normally
-   - Supervisor: writes health.json, commit.json correctly
+   - Spine: running, IPC socket responsive
+   - Cortex: running, producing events
+   - Supervisor: writes health.json, state.json correctly
    - State: `state.json` exists, `.paused` NOT created on first start
+   - Heartbeat: wired in IPC + Supervisor (600s stall detection)
 6. **Bugs fixed in this session**:
-   - Supervisor first-start: initialized `state.json` instead of forever-pausing (was creating `.paused` and never monitoring cortex)
-   - Entrypoint: creates fresh `feat/talos` branch on restart (not reusing corrupted one)
-   - Entrypoint: ensures `/memory` directory exists with writable permissions
+   - Supervisor first-start: initialized `state.json` instead of forever-pausing
+   - Supervisor missing methods: `_record_good_commit`, `_load_last_good_commit`, `_revert_to_last_good_commit`
+   - HealthMonitor heartbeat: wired `record_event` in IPC, `cortex_started` in Supervisor, `is_stalled` detection in run loop
+   - TelegramPoller: synchronous urllib calls blocked asyncio loop; fixed with `asyncio.to_thread`
+   - Entrypoint: creates fresh `feat/talos` branch on restart + ensures `/memory` directory exists
 
 ### What We Did NOT Do (Pending)
 1. ~~Fix `/memory` write permission issue~~ — Fixed
@@ -366,7 +369,7 @@ git -C talos -c user.name="Redna" -c user.email="gruhl.alexander@gmail.com" comm
    ./talosctl start
    ```
 6. **Merge `feat/talos-next` into `main`** — Infrastructure changes are ready but not merged into `main`
-7. **Overnight soak test** — Cortex has been running for ~45 minutes without crashes. Need longer verification.
+7. **Overnight soak test** — Cortex has been running for ~1 hour without crashes. Need longer verification.
 8. **X-ray dashboard** was stopped earlier and has NOT been restarted. Run `docker compose up -d xray` to re-enable it.
 
 ### How to Continue in Next Session
