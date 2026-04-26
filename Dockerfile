@@ -43,14 +43,18 @@ RUN git config --system --add safe.directory '*'
 # 1. Cache dependencies (Layer is cached unless pyproject.toml/uv.lock changes)
 COPY talos_runtime/talos/pyproject.toml talos_runtime/talos/uv.lock ./
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --frozen --no-install-project --no-dev --no-progress
+    uv sync --frozen --no-install-project --no-progress --extra dev
 
 # 2. Copy the actual code
 COPY talos_runtime/talos/ .
 
-# 3. Final sync to install the local project (fast as deps are cached)
+# 3. Final sync to install the local project (fast as deps are cached) with dev deps
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --frozen --no-dev --no-progress
+    uv sync --frozen --no-progress --extra dev
+
+# 4. Agent sandbox: install pip + make venv writable so Talos can add packages
+RUN uv pip install pip && \
+    chmod -R 777 /venv
 
 # 4a. Preserve pristine spine files (restored on each startup to prevent cortex corruption)
 RUN cp -a /app/spine /spine_backup
