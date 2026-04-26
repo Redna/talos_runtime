@@ -146,7 +146,7 @@ function renderEvents(){
     else if(type.includes("override"))cls+=" override";
     else if(type.includes("started"))cls+=" started";
     div.className=cls;
-    const ts=document.createElement("span");ts.className="ts";ts.textContent=(ev.ts||"").substring(11,19);div.appendChild(ts);
+    const ts=document.createElement("span");ts.className="ts";ts.textContent=(ev.ts||"").substring(0,19).replace("T"," ");div.appendChild(ts);
     let summary=type.replace(/^(spine\.|cortex\.)/,"");
     if(ev.reason)summary+=" : "+ev.reason;
     if(ev.exit_code)summary+=" (exit "+ev.exit_code+")";
@@ -239,19 +239,6 @@ function renderAllMessages(messages){
   var transcript=document.getElementById("transcript");if(!transcript)return;
   transcript.innerHTML="";
   var turns=buildTurns(messages);
-  // Pin system prompt at top
-  for(var i=0;i<turns.length;i++){
-    if(turns[i].type==="system"){
-      var sysDiv=document.createElement("div");sysDiv.className="msg msg-system";
-      sysDiv.style.cssText="position:sticky;top:0;z-index:10;background:#1c2128;border-bottom:2px solid var(--border);margin-bottom:8px;";
-      var label=document.createElement("div");label.className="msg-label";label.textContent="system prompt (pinned)";
-      sysDiv.appendChild(label);
-      sysDiv.appendChild(makeCollapsibleBody(turns[i].messages[0].content||"",sysDiv));
-      transcript.appendChild(sysDiv);
-      turns.splice(i,1);
-      break;
-    }
-  }
   for(var i=0;i<turns.length;i++){
     appendTurn(transcript,turns[i]);
   }
