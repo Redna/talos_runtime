@@ -692,13 +692,14 @@ def reset(hard=False, preserve=False):
         print("[talosctl] Wiping memory...")
         if memory_dir.exists():
             try:
-                for item in memory_dir.iterdir():
-                    if item.is_file():
-                        item.unlink()
-                    elif item.is_dir():
-                        result = subprocess.run(["rm", "-rf", str(item)], capture_output=True, text=True)
-                        if result.returncode != 0:
-                            print(f"[talosctl] Warning: could not remove {item}. Skipping.")
+                # Files may be owned by root (container user). Use sudo rm -rf to ensure
+                # complete cleanup regardless of ownership.
+                result = subprocess.run(
+                    ["sudo", "rm", "-rf", str(memory_dir)],
+                    capture_output=True, text=True
+                )
+                if result.returncode != 0:
+                    print(f"[talosctl] Warning: could not remove {memory_dir}: {result.stderr}. Skipping.")
             except OSError as e:
                 print(f"[talosctl] Warning: could not wipe memory dir: {e}. Skipping.")
 
