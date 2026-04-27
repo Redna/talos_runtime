@@ -268,11 +268,16 @@ function appendMessage(msg){
   }
 
   if(role==="tool"){
-    if(currentTurnEl){
-      const resultDiv=renderToolResult(msg,null);
-      currentTurnEl.el.appendChild(resultDiv);
-      maybeScroll(transcript);
-      return;
+    const tcid=msg.tool_call_id||"";
+    if(currentTurnEl&&tcid){
+      const calls=currentTurnEl.assistant.tool_calls||[];
+      const matched=calls.some(tc=>(tc.id||"")===tcid);
+      if(matched){
+        const resultDiv=renderToolResult(msg,null);
+        currentTurnEl.el.appendChild(resultDiv);
+        maybeScroll(transcript);
+        return;
+      }
     }
     const turn={type:"orphan_tools",messages:[msg]};
     appendTurn(transcript,turn);
@@ -330,9 +335,16 @@ function buildTurns(messages){
     if(role==="assistant"){
       var turnNum=m._turn||"";
       var turn={type:"assistant",assistant:m,toolResults:[]};
+      var toolCallIds=new Set();
+      var tcs=m.tool_calls||[];
+      for(var tci=0;tci<tcs.length;tci++){toolCallIds.add(tcs[tci].id||"");}
       j++;
-      while(j<body.length&&body[j].role==="tool"&&body[j]._turn===turnNum){
-        turn.toolResults.push(body[j]);j++;
+      while(j<body.length&&body[j].role==="tool"){
+        var tr=body[j];
+        var trId=tr.tool_call_id||"";
+        if(toolCallIds.has(trId)){
+          turn.toolResults.push(tr);j++;
+        }else{break;}
       }
       turns.push(turn);continue;
     }

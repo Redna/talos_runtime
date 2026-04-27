@@ -22,8 +22,9 @@ if [ -d /app/.git ]; then
     echo "[Entrypoint] Existing repo found, pulling latest..."
     cd /app
     git fetch origin "$GIT_BRANCH"
-    git checkout "$GIT_BRANCH"
+    git checkout -f "$GIT_BRANCH"
     git reset --hard "origin/$GIT_BRANCH"
+    git clean -fd
 else
     echo "[Entrypoint] Fresh volume, cloning repo..."
     rm -rf /app/.[!.]* /app/* 2>/dev/null
@@ -41,8 +42,8 @@ cd /app
 # keeping the commit history on origin/feat/talos available for the
 # agent to pull later if needed.
 if git rev-parse --verify "$VOLATILE_BRANCH" > /dev/null 2>&1; then
-    git branch -D "$VOLATILE_BRANCH"
-    git checkout -b "$VOLATILE_BRANCH"
+    git checkout -f "$GIT_BRANCH"
+    git checkout -B "$VOLATILE_BRANCH"
 else
     git checkout -b "$VOLATILE_BRANCH"
 fi
