@@ -58,6 +58,7 @@ class MessageTraceWriter:
             self.data_dir.mkdir(parents=True, exist_ok=True)
             self._file = open(self.data_dir / f"{today}.jsonl", "a", encoding="utf-8")
             self._current_date = today
+            self._written_fingerprints.clear()
 
     @staticmethod
     def _fingerprint(msg: dict) -> str:

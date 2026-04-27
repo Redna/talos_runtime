@@ -90,6 +90,12 @@ class XRayClient:
                             if not line:
                                 continue
                             msg = json.loads(line)
+                            turn = msg.get("_turn", 0)
+                            if self._messages:
+                                last_turn = self._messages[-1].get("_turn", 0)
+                                # Detect cortex restart: turn drops by >10
+                                if last_turn > turn + 10:
+                                    self._messages.clear()
                             self._messages.append(msg)
                             if len(self._messages) > self._max_messages:
                                 self._messages = self._messages[-self._max_messages :]
