@@ -52,6 +52,9 @@ fi
 # The agent can still git fetch explicitly, but this removes the immediate
 # temptation of an existing origin/feat/talos tracking branch.
 git update-ref -d "refs/remotes/origin/$VOLATILE_BRANCH" 2>/dev/null || true
+# Also strip the legacy feat/talos and the new v2 push target.
+git update-ref -d "refs/remotes/origin/feat/talos" 2>/dev/null || true
+git update-ref -d "refs/remotes/origin/feat/talos-v2" 2>/dev/null || true
 
 echo "[Entrypoint] Branch: $(git -C /app rev-parse --abbrev-ref HEAD)"
 COMMIT=$(git -C /app rev-parse HEAD)
