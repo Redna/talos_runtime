@@ -354,7 +354,7 @@ async def startup_event():
 @app.post("/v1/chat/completions")
 async def chat_completions(request: Request, background_tasks: BackgroundTasks):
     body = await request.json()
-    model = body.get("model", "")
+    model = str(body.get("model", ""))
     is_streaming = body.get("stream", False)
 
     backend_key = "local"

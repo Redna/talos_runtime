@@ -48,6 +48,11 @@ else
     git checkout -b "$VOLATILE_BRANCH"
 fi
 
+# Prevent accidental merge of old volatile branch state from remote on startup.
+# The agent can still git fetch explicitly, but this removes the immediate
+# temptation of an existing origin/feat/talos tracking branch.
+git update-ref -d "refs/remotes/origin/$VOLATILE_BRANCH" 2>/dev/null || true
+
 echo "[Entrypoint] Branch: $(git -C /app rev-parse --abbrev-ref HEAD)"
 COMMIT=$(git -C /app rev-parse HEAD)
 echo "[Entrypoint] Commit: $COMMIT"
