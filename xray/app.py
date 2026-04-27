@@ -99,9 +99,17 @@ async def websocket_endpoint(ws: WebSocket):
 @app.get("/api/state")
 async def api_state():
     if _xray_client:
+        msgs = _xray_client._messages
+        # Ensure the window starts at an assistant message so we don't
+        # show orphaned tool results without the call that triggered them.
+        start = max(0, len(msgs) - 100)
+        for i in range(start, len(msgs)):
+            if msgs[i].get("role") == "assistant":
+                start = i
+                break
         return {
             **_xray_client._state,
-            "messages": _xray_client._messages[-100:],
+            "messages": msgs[start:],
         }
     return {}
 

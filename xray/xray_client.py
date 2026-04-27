@@ -77,6 +77,12 @@ class XRayClient:
                     if path != self._current_trace_path:
                         self._current_trace_path = path
                         self._file_offset = 0
+                        self._messages.clear()
+                    current_size = path.stat().st_size
+                    if current_size < self._file_offset:
+                        # File was truncated/rewritten (e.g., container restart)
+                        self._file_offset = 0
+                        self._messages.clear()
                     with open(path, "r", encoding="utf-8") as f:
                         f.seek(self._file_offset)
                         for line in f:
