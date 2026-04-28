@@ -529,6 +529,20 @@ async def chat_completions(request: Request, background_tasks: BackgroundTasks):
                         else 0.0
                     )
 
+                # Clamp nonsensical values — context_pct > 1.0 means the
+                # tokenizer or KV cache is producing bogus counts. Values
+                # above 100% corrupt the auto-fold guard in the spine.
+                raw_pct = resp_json.get("usage", {}).get("context_pct", 0.0)
+                if raw_pct > 1.0:
+                    _LOG.warning(
+                        "context_pct clamped: raw=%.4f (%.0f tokens / %d window). "
+                        "Ollama token count may be inflated — check KV cache.",
+                        raw_pct,
+                        resp_json.get("usage", {}).get("prompt_tokens", 0),
+                        LOCAL_CONTEXT_WINDOW,
+                    )
+                    resp_json["usage"]["context_pct"] = 1.0
+
                 # Normalize Gemma control tokens out of the response content
                 for choice in resp_json.get("choices", []):
                     msg = choice.get("message", {})
