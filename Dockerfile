@@ -57,7 +57,8 @@ RUN uv pip install pip && \
     chmod -R 777 /venv
 
 # 4a. Preserve pristine spine files (restored on each startup to prevent cortex corruption)
-RUN cp -a /app/spine /spine_backup
+RUN cp -a /app/spine /spine_backup && \
+    chmod -x /spine_backup/*.py
 
 # 4. Add runtime scripts (Hardened)
 COPY talos_runtime/scripts/ /runtime_scripts/

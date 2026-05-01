@@ -62,6 +62,7 @@ echo "[Entrypoint] Commit: $COMMIT"
 
 echo "Restoring authoritative spine files..."
 cp -a /spine_backup/. /app/spine/
+chmod -x /app/spine/*.py
 echo "Purging stale __pycache__..."
 rm -rf /app/spine/__pycache__/
 
