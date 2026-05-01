@@ -15,7 +15,7 @@ RUN mkdir -p /usr/local/share/talos/tokenizers && \
     wget -qO /usr/local/share/talos/tokenizers/gemma_tokenizer.model \
     "https://huggingface.co/google/gemma-4-31b-it/resolve/main/tokenizer.model" || true
 
-COPY app.py .
+COPY app.py tokenizer.py .
 
 EXPOSE 4000
 
