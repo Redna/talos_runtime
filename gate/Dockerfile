@@ -8,10 +8,12 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Download Gemma tokenizer model for accurate context estimation
+# Download Gemma tokenizer model for accurate context estimation.
+# If the download fails (e.g. network restricted), the tokenizer falls back
+# to prompt_tokens-based estimation — the Gate still works.
 RUN mkdir -p /usr/local/share/talos/tokenizers && \
     wget -qO /usr/local/share/talos/tokenizers/gemma_tokenizer.model \
-    "https://huggingface.co/google/gemma-4-31b-it/resolve/main/tokenizer.model"
+    "https://huggingface.co/google/gemma-4-31b-it/resolve/main/tokenizer.model" || true
 
 COPY app.py .
 
