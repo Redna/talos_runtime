@@ -18,6 +18,7 @@ from fastapi import (
 )
 from fastapi.responses import JSONResponse, StreamingResponse
 from dotenv import load_dotenv
+from tokenizer import TokenizerManager
 
 # Talos Gate - v1.1
 load_dotenv()
@@ -37,6 +38,16 @@ AUDIO_API_URL = os.getenv(
 AUDIO_API_KEY = os.getenv("AUDIO_API_KEY", TOGETHERAI_API_KEY)
 OLLAMA_HOST = os.getenv("OLLAMA_HOST", "host.docker.internal:11434")
 DATA_DIR = Path(os.getenv("DATA_DIR", "/data"))
+
+# Tokenizer for accurate context_pct computation
+_tokenizer = TokenizerManager(
+    model=os.getenv("DEFAULT_MODEL", ""),
+    tokenizer_model_path=os.getenv(
+        "TOKENIZER_MODEL_PATH",
+        "/usr/local/share/talos/tokenizers/gemma_tokenizer.model",
+    ),
+    context_window=LOCAL_CONTEXT_WINDOW,
+)
 
 # State
 PRICING_CACHE: Dict[str, Dict[str, float]] = {}
@@ -520,28 +531,25 @@ async def chat_completions(request: Request, background_tasks: BackgroundTasks):
 
                 resp_json = resp.json()
 
-                # Compute context_pct if backend didn't provide it
-                if "context_pct" not in resp_json.get("usage", {}):
-                    prompt_tokens = resp_json.get("usage", {}).get("prompt_tokens", 0)
+                # Compute context_pct from the actual tokenizer on the
+                # request messages. This is deterministic and far more
+                # accurate than relying on Ollama's prompt_tokens which
+                # can swing by 7K+ tokens and report bogus values >100%.
+                request_messages = body.get("messages", [])
+                request_pct = _tokenizer.context_pct(request_messages)
+                if request_pct is not None:
+                    resp_json.setdefault("usage", {})["context_pct"] = round(
+                        request_pct, 4
+                    )
+                elif "context_pct" not in resp_json.get("usage", {}):
+                    prompt_tokens = resp_json.get("usage", {}).get(
+                        "prompt_tokens", 0
+                    )
                     resp_json.setdefault("usage", {})["context_pct"] = (
                         round(prompt_tokens / LOCAL_CONTEXT_WINDOW, 4)
                         if prompt_tokens and LOCAL_CONTEXT_WINDOW
                         else 0.0
                     )
-
-                # Clamp nonsensical values — context_pct > 1.0 means the
-                # tokenizer or KV cache is producing bogus counts. Values
-                # above 100% corrupt the auto-fold guard in the spine.
-                raw_pct = resp_json.get("usage", {}).get("context_pct", 0.0)
-                if raw_pct > 1.0:
-                    _LOG.warning(
-                        "context_pct clamped: raw=%.4f (%.0f tokens / %d window). "
-                        "Ollama token count may be inflated — check KV cache.",
-                        raw_pct,
-                        resp_json.get("usage", {}).get("prompt_tokens", 0),
-                        LOCAL_CONTEXT_WINDOW,
-                    )
-                    resp_json["usage"]["context_pct"] = 1.0
 
                 # Normalize Gemma control tokens out of the response content
                 for choice in resp_json.get("choices", []):

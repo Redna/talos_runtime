@@ -195,6 +195,8 @@ curl http://localhost:4001/state
 
 ## Architecture Details
 
+> **Docs:** [ARCHITECTURE.md](docs/docs/ARCHITECTURE.md) covers design principles and aspirations. [IMPLEMENTATION.md](docs/docs/IMPLEMENTATION.md) is the grounded reference of the actual code on `talos_seed` — Spine/Cortex components, IPC flow, tool catalog, and protection layers.
+
 ### Two-Process Model
 
 Inside the `talos` container:
