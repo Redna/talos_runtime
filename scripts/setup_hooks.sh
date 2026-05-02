@@ -57,7 +57,7 @@ cat > "$POST_COMMIT_FILE" << 'EOF'
 # Post-commit hook: automatically push to origin/feat/talos
 
 GIT_REMOTE=${GIT_REMOTE:-origin}
-GIT_BRANCH=${GIT_BRANCH:-feat/talos-v2}
+GIT_BRANCH=${GIT_BRANCH:-feat/talos}
 
 echo "[Post-commit] Pushing to $GIT_REMOTE/$GIT_BRANCH..."
 git push "$GIT_REMOTE" "$GIT_BRANCH" 2>&1 || {
