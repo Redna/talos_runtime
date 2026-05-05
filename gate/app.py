@@ -568,11 +568,36 @@ async def chat_completions(request: Request, background_tasks: BackgroundTasks):
                 )
                 return resp_json
         except (httpx.ConnectError, httpx.TimeoutException, httpx.HTTPStatusError) as e:
+            error_msg = str(e)
+            is_context_overflow = "prompt is too long" in error_msg.lower()
+            if isinstance(e, httpx.HTTPStatusError):
+                try:
+                    body_text = e.response.text
+                    if "prompt is too long" in body_text.lower():
+                        is_context_overflow = True
+                        # Extract the token counts from Ollama's error
+                        error_msg = body_text[:300]
+                except Exception:
+                    pass
+            if is_context_overflow:
+                return Response(
+                    content=json.dumps(
+                        {
+                            "error": {
+                                "message": error_msg,
+                                "type": "context_overflow",
+                                "code": "context_overflow",
+                            }
+                        }
+                    ),
+                    status_code=400,
+                    media_type="application/json",
+                )
             return Response(
                 content=json.dumps(
                     {
                         "error": {
-                            "message": f"Gateway Error: Model '{model}' is currently unreachable or offline. Please check available models or fallback to the local engine. Details: {str(e)}",
+                            "message": f"Gateway Error: Model '{model}' is currently unreachable or offline. Please check available models or fallback to the local engine. Details: {error_msg}",
                             "type": "server_error",
                             "code": "model_offline",
                         }
