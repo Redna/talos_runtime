@@ -2,7 +2,7 @@ import json
 import os
 
 DEFAULT_TOKENIZER_PATH = "/usr/local/share/talos/tokenizers/gemma_tokenizer.model"
-DEFAULT_CONTEXT_WINDOW = 65536
+DEFAULT_CONTEXT_WINDOW = 262144
 
 
 class TokenizerManager:
@@ -52,23 +52,24 @@ class TokenizerManager:
     def available(self) -> bool:
         return self._backend != "unavailable"
 
-    def count_tokens(self, messages: list[dict]) -> int:
-        """Tokenize serialized messages and return token count."""
-        if self._backend == "sentencepiece" and self._sp is not None:
-            text = "\n".join(
-                json.dumps(m, ensure_ascii=False) for m in messages
+    def count_tokens(self, messages: list[dict], tools: list[dict] | None = None) -> int:
+        """Tokenize serialized messages and optional tools, return token count."""
+        text = "\n".join(
+            json.dumps(m, ensure_ascii=False) for m in messages
+        )
+        if tools:
+            text += "\n" + "\n".join(
+                json.dumps(t, ensure_ascii=False) for t in tools
             )
+        if self._backend == "sentencepiece" and self._sp is not None:
             return len(self._sp.encode(text))
         if self._backend == "tiktoken" and self._enc is not None:
-            text = "\n".join(
-                json.dumps(m, ensure_ascii=False) for m in messages
-            )
             return len(self._enc.encode(text))
         return 0
 
-    def context_pct(self, messages: list[dict]) -> float | None:
-        """Return context_pct from tokenizing messages, or None if unavailable."""
+    def context_pct(self, messages: list[dict], tools: list[dict] | None = None) -> float | None:
+        """Return context_pct from tokenizing messages+optional tools, or None if unavailable."""
         if not self.available or self.context_window <= 0:
             return None
-        tokens = self.count_tokens(messages)
+        tokens = self.count_tokens(messages, tools)
         return max(0.0, min(tokens / self.context_window, 1.0))

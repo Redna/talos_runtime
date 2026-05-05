@@ -31,7 +31,7 @@ LOG_DIR = Path(os.getenv("RUNTIME_LOG_DIR", "/runtime_logs"))
 LEDGER_FILE = MEMORY_DIR / "financial_ledger.json"
 TOGETHERAI_API_KEY = os.getenv("TOGETHERAI_API_KEY", "")
 DAILY_BUDGET_LIMIT = float(os.getenv("DAILY_BUDGET_LIMIT", "5.00"))
-LOCAL_CONTEXT_WINDOW = int(os.getenv("TALOS_CONTEXT_WINDOW", "65536"))
+LOCAL_CONTEXT_WINDOW = int(os.getenv("TALOS_CONTEXT_WINDOW", "262144"))
 AUDIO_API_URL = os.getenv(
     "AUDIO_API_URL", "https://api.together.xyz/v1/audio/transcriptions"
 )
@@ -196,12 +196,14 @@ THINKING_MODELS: set[str] = set()
 MODEL_MAP = {
     "talos": "ollama",
     "gemma4:31b-cloud": "ollama",
+    "gemma4": "ollama",
     "minimax-m2.7:cloud": "ollama",
     "glm-5.1:cloud": "ollama",
 }
 
 MODEL_REMAP = {
     "talos": "gemma4:31b-cloud",
+    "gemma4": "gemma4:31b-cloud",
 }
 
 
@@ -536,7 +538,7 @@ async def chat_completions(request: Request, background_tasks: BackgroundTasks):
                 # accurate than relying on Ollama's prompt_tokens which
                 # can swing by 7K+ tokens and report bogus values >100%.
                 request_messages = body.get("messages", [])
-                request_pct = _tokenizer.context_pct(request_messages)
+                request_pct = _tokenizer.context_pct(request_messages, body.get("tools"))
                 if request_pct is not None:
                     resp_json.setdefault("usage", {})["context_pct"] = round(
                         request_pct, 4
