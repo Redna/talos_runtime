@@ -169,6 +169,9 @@ class MessageTraceWriter:
             self._written_fingerprints.add(resp_fp)
         self._file.flush()
 
+    def reset(self):
+        self._written_fingerprints.clear()
+
     def close(self):
         if self._file:
             self._file.close()
@@ -907,6 +910,12 @@ async def xray_history_detail(filename: str):
     if not str(filepath).startswith(str(LOG_DIR)):
         raise HTTPException(status_code=403, detail="Forbidden")
     return json.loads(filepath.read_text())
+
+
+@app.post("/v1/xray/reset-trace")
+async def xray_reset_trace():
+    _trace_writer.reset()
+    return {"status": "ok", "message": "Trace fingerprint cache cleared."}
 
 
 @app.post("/v1/audit")
