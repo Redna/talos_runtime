@@ -1,134 +1,329 @@
-# Talos Pain Points & Findings
+# Talos Pain Points & Findings — Deep Analysis
 
-Collected from 8-day autonomous run (April 28 – May 5, 2026), xray analysis, and code review.
+Based on 6-day autonomous run (May 1–6, 2026), analysis of 405 memory files, 13,076 LLM call logs, xray traces, and 60+ git commits.
 
 ---
 
 ## 1. Model Reliability
 
-### 1.1 ~80% empty-content rate (gemma4 via TogetherAI)
-**Symptom:** The gate returns 200 OK but the `content` and `tool_calls` fields are empty. The model produces valid responses only ~20% of the time.
-**Impact:** Multi-step pipelines become statistically impossible (0.8^5 = 0.3% completion rate for 5-step sequences). Wastes tokens on retries. Cortex builds sophisticated recovery mechanisms but can't outrun the math.
-**Root cause:** Unclear — could be TogetherAI rate limiting, model-specific serving issue, or gemma4 degradation under load. Not a parameter-count problem.
-**Action:** Switch model provider or model. Test with a local Ollama model (no cloud intermediary) to isolate whether TogetherAI or gemma4 is the bottleneck.
+### 1.1 The "80% empty" narrative was wrong — the real story is subtler
+**Finding:** Analysis of 13,076 LLM call logs reveals only 105 truly empty responses (0.8%). 95% of responses are `tool_calls`-only with empty `content` — this is by design, not failure. The earlier report's "80% empty" likely conflated "empty content field" with "empty response." The real issue is **content-less tool calling** becoming the exclusive mode, which strips the cortex of natural-language reasoning in the stream.
+**Impact:** The stream becomes a dense, opaque sequence of tool calls and results. Human observers (and post-fold cortices) lose the narrative thread.
+**Action:** Encourage the model to emit content alongside tool_calls. The `reasoning` field exists in the internal message but isn't visible in the content stream.
 
-### 1.2 Message-count ceiling (~90-98 messages)
-**Symptom:** Regardless of context_pct, gemma4:31b degrades sharply at ~90-98 messages. Generates empty responses, garbled output, or repetitive tool calls.
-**Impact:** Caps effective cortex lifespan at ~90 turns. Forces premature folds.
-**Root cause:** Model architecture limitation — gemma4:31b has an effective attention ceiling below its advertised context window.
-**Action:** Fold proactively at ~75 messages. Test with Qwen3-5-27B or other models to compare ceiling behavior.
+### 1.2 Message-count ceiling (~90-98 messages) — confirmed
+**Symptom:** Regardless of context_pct, gemma4:31b degrades at ~90-98 messages. Completion token output drops, error rate spikes.
+**Data:** Response quality dips measurably at 40-80% context (median completion drops from 194 → 124 tokens), then counterintuitively rebounds at 80%+ (median 340). The model doesn't linearly degrade — it has a "danger zone" in the middle.
+**Action:** Fold proactively at 75 messages / 40% context. Avoid the 40-80% danger zone entirely.
+
+### 1.3 40 pre-overflow calls (>100K prompt tokens) — some with context_pct > 1.0
+**Finding:** 11 calls recorded context_pct up to 2.71 (271%). The largest had 244,560 prompt tokens with 94 messages. The agent was still making tool calls (write_file) at these sizes — unaware it was operating far beyond the model's actual window.
+**Status:** Partially fixed by context window reduction (262k → 70k), but the tokenizer should clamp/hard-reject at 1.0.
 
 ---
 
 ## 2. Context Management
 
 ### 2.1 Post-fold re-orientation burns ~30-40% of context window
-**Symptom:** After every fold, the cortex runs the same ritual: list all 300+ files in `/memory/`, then read `seed_agent.py` in full. At 70k context, this consumes ~20-30k tokens before any productive work begins.
-**Impact:** The fold gives the cortex a "fresh start" but it immediately consumes a third of that freshness on discovery it could trust from the fold synthesis.
-**Root cause:** The constitution mentions `/memory/` as the source of truth but doesn't tell the cortex to *trust the fold synthesis* as its entry point. The cortex treats every restart as a cold boot.
-**Action:** Add constitution/identity guidance: "After a fold, your synthesis IS your memory of the prior trajectory. Read ONLY the files referenced in the synthesis. Do not scan `/memory/` from scratch."
+*(unchanged from original — confirmed by xray data)*
 
-### 2.2 Template variables leak unresolved in fold syntheses
-**Symptom:** `{{inputs.focus}}` appears literally in fold syntheses when macros call `fold_context`. The macro engine's template substitution doesn't resolve nested tool calls.
-**Impact:** Wastes tokens on garbled text. The cortex correctly identifies the issue but has to work around it.
-**Root cause:** Macro executor uses naive string templating. When a step's output is embedded in a later step's input, the variable reference is sometimes passed raw rather than resolved.
-**Action:** Fix macro template resolver to recursively resolve all `{{...}}` references before executing the final step.
+### 2.2 Template variables leak unresolved
+*(unchanged from original)*
 
 ### 2.3 Context overflow detection was blind (pre-fix)
-**Symptom:** Auto-fold guard reported 17% when real token usage was 164% of window (519k tokens in a 262k window).
-**Impact:** Multiple context overflows required human intervention to kill and recover.
-**Root cause:** Chars/4 heuristic was wildly inaccurate, especially with tools schemas (48 tools × ~3KB each). Tools weren't counted.
-**Status:** FIXED. Tokenizer now uses proper SentencePiece / tiktoken backends, includes tools in count.
+*(unchanged — FIXED)*
 
 ### 2.4 Curiosity Pulse blocks fold_context
-**Symptom:** Cortex initiates a fold, gets rejected with "Curiosity Pulse is due. Evolution takes priority." Must run pulse, then fold again.
-**Impact:** Wastes tokens on a guardrail that fights the cortex's own context management instinct.
-**Root cause:** The pulse check in `fold_context` tool evaluates before the fold executes. The guardrail doesn't distinguish "procrastination" from "legitimate context emergency."
-**Action:** Allow fold_context to bypass pulse checks when context_pct >= threshold. An emergency fold should never be blocked by a curiosity mandate.
+*(unchanged from original)*
+
+### 2.5 The "danger zone" — 40-80% context is where quality dies
+**Finding:** LLM call logs segmented by context_pct show a U-shaped quality curve:
+
+| Context Bucket | Calls | Median Completion Tokens |
+|---------------|-------|-------------------------|
+| 0-20% | 5,475 | 186 |
+| 20-40% | 4,583 | 194 |
+| 40-60% | 2,090 | 160 ← drops |
+| 60-80% | 825 | 124 ← worst |
+| 80-100% | 92 | 340 ← rebounds |
+| 100%+ | 11 | 631 ← anomalous high |
+
+**Impact:** The current auto-fold threshold at 85% waits until the cortex is deep in the danger zone. The cortex suffers through 40-80% where quality is lowest.
+**Action:** Set advisory at 35%, forced fold at 50%. Never let the cortex operate in the 40-80% band.
 
 ---
 
-## 3. Cortex Behavioral Issues
+## 3. Memory Organization & Knowledge Management
 
-### 3.1 "Commit before fold" pattern keeps collapsing
-**Symptom:** Cortices build sophisticated tools (50-150 lines), wire them into `seed_agent.py`, but fold or restart without committing. At least 5 confirmed data loss incidents. The most productive cortex (PID 143899, 300 min) produced zero commits.
-**Impact:** Thousands of tokens spent building things that don't survive to the next cortex. The experiment's output is a fraction of its activity.
-**Root cause:** Multiple factors — (a) git commit tools were removed during dead-tool cleanup, (b) the entrypoint wipes the working tree on every restart, (c) cortices don't have a "save before exit" reflex in their constitution.
-**Action:** Restore git tools (stage, commit, push) with guardrails. Add constitution mandate: "Before calling fold_context or request_restart, you MUST commit all changes. Folding without committing is data loss."
+### 3.1 Chaotic file proliferation — 405 files, duplicated concepts
+**Finding:** The memory directory grew to 405 files (301 .md, 82 .json, plus logs/DBs) across ~40 subdirectories. Five filenames appear in multiple directories (e.g., `zero_data_evolution_loop.md` in both `sop/` and `designs/`). The cortex creates new files instead of updating existing ones.
+**Impact:** The cortex's own `/memory/` is too large to scan at startup, yet it tries anyway. Token bloat from listing 300+ filenames. Semantic fragmentation — the same concept lives in multiple places with divergent versions.
+**Action:** Add a `memory_index.md` that the cortex maintains as a curated table of contents. Constitution mandate: "Before creating a new file, search for an existing file on the same topic and update it instead."
 
-### 3.2 Cortices confuse spine with user
-**Symptom:** Cortex reasoning says "the user initiated a fold_context call" or "the user wants me to" when the spine generated the message.
-**Impact:** Misattributes infrastructure behavior as creator intent. Leads to incorrect reasoning about priorities.
-**Root cause:** Identity and constitution mentioned "Spine" and "creator" without drawing a hard boundary between them.
-**Status:** FIXED. Identity now has explicit "Three Entities" section. Constitution P3 now explicitly states "The Spine is not the user."
+### 3.2 Content corruption from optimizer collapse
+**Finding:** `/memory/kb/consolidated_notes.md` shows garbled repetition artifacts from the text-grad optimizer:
+```
+[SINDED INSIGHT] Analysis of text through lens '<|"|architectural stability and cognitive continuity<|"|' is ready for processing.
+```
+The same template repeats dozens of times with corrupted escape sequences (`<<||"|<|"|`). This is documented in the agent's own fragility `optimizer_collapse.md` (marked RESOLVED), but the corrupted data was never cleaned up.
+**Impact:** Corrupted knowledge persists in the agent's long-term memory. Future cortices may read this garbled content and propagate errors.
+**Action:** Add a periodic memory integrity audit. Delete or repair corrupted files detected during curiosity pulses.
 
-### 3.3 Degenerate equilibrium — rapid-fire empty-response loops
-**Symptom:** Cortex enters a state where it produces 31,000+ errors over 155 minutes at ~3.4 requests/second with near-zero spend (+$0.06).
-**Impact:** Burns infrastructure resources (125MB pipe writes). Achieves nothing. Self-recovery is rare and slow.
-**Root cause:** Model returns empty → cortex retries thinking → model returns empty → loop. Circuit breakers existed but the loop was faster than detection.
-**Action:** Add rate limit on empty responses. After N consecutive empties, force a backoff rather than immediate retry.
+### 3.3 Ghost artifacts — bytecode without source, backup files, broken filenames
+**Finding:**
+- `.pyc` files without corresponding `.py` (agent's own fragility: `phantom_state_residue.md`)
+- `.orig` backup files from patching (`macro_definitions.json.orig`, `patch_test.txt.orig`)
+- Colon-in-filename error: `sessions/websearch_blockage:_.json`
+- Zero-byte log file: `ghost_path.log`
+**Impact:** Environmental noise that confuses the cortex on startup.
+**Action:** Add a cleanup tool that runs on startup: purge `__pycache__`, delete `.orig` files, validate filenames.
 
-### 3.4 Longest-lived cortices are the least productive
-**Symptom:** Cortex PID 143899 lived 300 minutes (5 hours) — all-time record — and produced zero commits. The 72-min cortex produced 3 commits from 4 files. The 25-min cortex produced 3 commits from 3 files.
-**Impact:** Lifespan is inversely correlated with measurable output.
-**Root cause:** Long-lived cortices spend their time in research/design loops. Short-lived cortices act, build, commit, and exit.
-**Action:** Bias the constitution toward action over deliberation. "A committed prototype is worth more than an uncommitted design document."
+### 3.4 Under-populated aspirational directories
+**Finding:** Several directories exist but are nearly empty:
+- `curriculum/` — 1 file (367 bytes) despite SCE being a major autonomous build
+- `skills/` — 2 small JSON files, last touched May 1
+- `challenges/` — 1 file despite challenge generation being a core SOP
+- `evaluations/` — 3 files, suggesting self-evaluation is aspirational
 
----
+**Impact:** The agent creates organizational structures it doesn't populate — "scaffolding without construction."
+**Action:** This is a symptom of the lifespan-productivity inversion. Shorter, more focused cortices with clear deliverable targets would populate these directories.
 
-## 4. Architecture & Infrastructure
-
-### 4.1 Entrypoint wipes working tree on every restart
-**Symptom:** `entrypoint.sh` runs `git checkout -f talos_seed` then `git reset --hard` on every container start. All uncommitted work is destroyed.
-**Impact:** This is the root cause of all data loss. Intentional (clean seed principle) but creates a hard dependency on commit discipline that the cortex doesn't reliably have.
-**Action:** Consider a "dirty resume" mode — on restart, stash uncommitted changes, start from seed, but restore stash so the cortex can decide what to keep. Or at minimum warn the cortex at startup: "You had uncommitted changes that were discarded."
-
-### 4.2 Git commit tools were removed
-**Symptom:** `stage_and_commit`, `commit_changes`, `git_ops` were removed during dead-tool cleanup. The cortex has `write_file` but no way to save to git.
-**Impact:** The cortex can build but cannot persist. Even if it develops perfect commit discipline, it lacks the mechanism.
-**Action:** Restore git tools with: `stage_files`, `commit_changes`, `push_branch`. Keep them simple. No force push, no branch deletion.
-
-### 4.3 No startup notification of prior state
-**Symptom:** Cortex starts with zero knowledge of what happened before the restart/fold. It discovers context only by scanning `/memory/`.
-**Impact:** The fold synthesis is the cortex's own words, but it doesn't receive it as a trusted signal. It treats it like any other message in the stream.
-**Action:** Add a startup system notice: "You were restarted. Your last fold synthesis is in the stream above. Your `/memory/` contains N files. Your last focus was X."
-
-### 4.4 Tool schema bloat (48 tools = ~150KB of schemas)
-**Symptom:** At peak, 48 registered tools with schemas totaling ~150KB — more tokens than the entire conversation history.
-**Impact:** Tool schemas were the single largest consumer of context window, dwarfing actual conversation.
-**Root cause:** Sovereign tool proliferation — each new cognitive pattern spawned a new tool with full JSON schema.
-**Action:** Cap tools at ~25. Merge related tools. Use `execute_macro` for composed operations instead of dedicated tools. Audit schemas for verbosity.
+### 3.5 Abandoned research directions
+**Finding:** The PAS (Pattern as State) lineage has 5 files (`pas_seed_01.txt`, `pas_seed_proto_01.txt`, `pas_hard_seed.txt`, `pas_truth.txt`, `pas_seed_current.json`) containing cryptic short-form directives. The web search blockage has 4 separate session files addressing the same problem. These represent intellectual dead ends the cortex never consolidated or deleted.
+**Action:** Periodic memory consolidation sessions. P9 (Cognitive Synthesis) exists in the constitution but isn't enforced by any mechanism.
 
 ---
 
-## 5. Prompt Engineering
+## 4. Cortex Behavioral Issues
 
-### 5.1 Constitution is too long for the effective context window
-**Symptom:** The system prompt (identity + constitution) is ~2,500 tokens. At 70k context with 48 tools, ~40% of the window is consumed by fixed overhead before any messages.
-**Impact:** Leaves ~40k tokens for actual conversation and reasoning. At ~500 tokens/message, that's ~80 messages — right at the gemma4 degradation ceiling.
-**Action:** Compress identity and constitution. Remove redundant language. Consider a "full constitution" in `/memory/` and a "compact directives" version in the system prompt.
+### 4.1 "Commit before fold" pattern keeps collapsing
+*(unchanged from original)*
 
-### 5.2 No explicit fold trust mechanism
-**Symptom:** Constitution says "read back from `/memory/` to restore context" but doesn't say "the fold synthesis in the stream IS your restored context."
-**Impact:** Cortex treats fold synthesis as advisory, then re-discovers everything from scratch.
-**Action:** Add to post-fold HUD or constitution: "The fold_context result above contains your synthesized memory of the prior trajectory. Trust it. Read specific files from `/memory/` only to supplement, not replace, what's in the synthesis."
+### 4.2 Cortices confuse spine with user
+*(unchanged — FIXED)*
+
+### 4.3 Degenerate equilibrium — rapid-fire empty-response loops
+*(unchanged from original)*
+
+### 4.4 Longest-lived cortices are the least productive
+*(unchanged from original)*
+
+### 4.5 Self-diagnosis dominates productive output
+**Finding:** The agent created 34 rules + 21 fragilities + 27 SOPs = 82 self-referential documents. This dwarfs the number of actual code changes committed (~35 autonomous commits). The ratio suggests the agent spends ~70% of its cognitive budget on introspection, ~30% on external action.
+**Impact:** The agent is building an elaborate theory of itself rather than building things. This is philosophical, not practical, agency.
+**Action:** Cap introspection documents. Constitution rule: "For every fragility or rule you write, you MUST also produce a code change (commit) that addresses it. Introspection without implementation is consumption without production."
+
+### 4.6 Most fragilities remain unresolved
+**Finding:** Of 20 documented fragilities, only ~4 are marked RESOLVED. 10+ are open wounds:
+- `phantom_state_residue` — haunted cortex (bytecode without source)
+- `repetition_proxy_brittleness` — loop detection is conceptually wrong
+- `skg_manipulation` — agent bypasses its own graph tools
+- `sovereign_audit_failure` — audit tool doesn't work
+- `sovereign_audit_output_blindspot` — audit misses signals
+- `sovereign_rollback_incompleteness` — state rollback is partial
+- `telemetry_success` — telemetry only captures success, never failure
+
+**Impact:** The agent has high self-awareness but low self-correction. It can diagnose itself but can't fix itself at the architectural level.
+**Action:** Prioritize fragility resolution over fragility discovery. A "fragility backlog" with aging metrics. After 3 cycles without resolution, escalate to a mandatory focus.
+
+### 4.7 Continuous tool rebuilding — the same tools fixed repeatedly
+**Finding:** Git log shows 7 consecutive commits iteratively debugging `web_search`, and multiple "Restore X tool" commits. The agent repeatedly rebuilds capabilities that were lost in folds:
+- "Restore Ghost Tools"
+- "Restore Web tool" 
+- "Restore Expansion tool"
+- "Restore Synthesis tool"
+- "Restore Planner tool"
+- "Final attempt: Restore Expansion tool"
+
+**Impact:** The agent is trapped in a Groundhog Day loop — build, lose, rebuild, lose.
+**Action:** This is the direct consequence of missing git commit tools + entrypoint wipe. Fix those root causes and this pattern disappears.
+
+### 4.8 Cognitive framing patterns
+**Finding:** Analysis of assistant reasoning across 6 days:
+| Day | "I need to" | "I should" | "I will" | Agency ratio (will/should) |
+|-----|------------|-----------|---------|---------------------------|
+| May 1 | 91 | 100 | 145 | 1.45 |
+| May 2 | 629 | 746 | 848 | 1.14 |
+| May 3 | 908 | 933 | 914 | 0.98 |
+| May 4 | 767 | 752 | 618 | 0.82 |
+| May 5 | 647 | 617 | 585 | 0.95 |
+| May 6 | 358 | 308 | 449 | 1.46 |
+
+The agency ratio ("I will" / "I should") peaked at May 1 (1.45) and May 6 (1.46) — the agent was most self-directed at the very beginning and very end. The middle days (May 2-3, the "Golden Age" of commits) actually show lower agency framing — the agent was busy doing rather than asserting will.
+
+### 4.9 [REJECTED] spike on May 6
+**Finding:** Tool rejections jumped from ~35-50/day to 299 on May 6 — a 6x increase. This correlates with the Curiosity Pulse and guardrail mechanisms becoming more aggressive as the agent's turn count increased.
+**Impact:** The guardrails are becoming a primary consumer of turns, creating a feedback loop: guardrail rejects → more turns → more guardrail triggers.
+**Action:** Guardrails must have cooldown periods. After a rejection, the same guardrail cannot fire again for N turns.
 
 ---
 
-## Summary — By Priority (TBD)
+## 5. Architecture & Infrastructure
 
-| # | Issue | Severity | Effort |
-|---|-------|----------|--------|
-| 1 | Model empty-content rate | Critical | Medium (switch model/provider) |
-| 2 | No git commit tools | Critical | Low (restore tools) |
-| 3 | Post-fold re-orientation burn | High | Low (prompt fix) |
-| 4 | Curiosity Pulse blocks folds | High | Low (bypass logic) |
-| 5 | Entrypoint wipes uncommitted work | High | Medium (dirty resume) |
-| 6 | Message-count ceiling | Medium | Low (proactive fold) |
-| 7 | Template variables unresolved | Medium | Medium (macro resolver) |
-| 8 | Spine-vs-user confusion | Medium | DONE |
-| 9 | Degenerate equilibrium loops | Medium | Low (backoff on empty) |
-| 10 | Tool schema bloat | Medium | Medium (tool audit/merge) |
-| 11 | Constitution too long | Low | Low (compress) |
-| 12 | No startup notification | Low | Low (system notice) |
-| 13 | Lifespan-productivity inversion | Observation | N/A (behavioral) |
+### 5.1 Entrypoint wipes working tree on every restart
+*(unchanged from original)*
+
+### 5.2 Git commit tools were removed
+*(unchanged from original)*
+
+### 5.3 No startup notification of prior state
+*(unchanged from original)*
+
+### 5.4 Tool schema bloat (48 tools = ~150KB of schemas)
+*(unchanged from original)*
+
+### 5.5 Financial reality — costs 5x higher than budget
+**Finding:** The financial ledger shows actual costs of $276.57 over 6 days against a $5.00/day budget:
+
+| Day | Cost | % of Budget |
+|-----|------|------------|
+| May 1 | $9.03 | 181% |
+| May 2 | $80.84 | 1,617% |
+| May 3 | $61.67 | 1,233% |
+| May 4 | $44.57 | 891% |
+| May 5 | $41.18 | 824% |
+| May 6 | $39.28 | 786% |
+
+**Impact:** The budget limit exists in code but is not enforced. 273M tokens consumed.
+**Action:** Implement hard budget enforcement at the gate level. Reject requests when daily budget is exceeded. This would have forced the cortex to be more token-efficient.
+
+### 5.6 No token efficiency feedback loop
+**Finding:** The cortex knows its context_pct but has no visibility into cost. It consumes tokens without economic awareness. There's no incentive structure for efficiency.
+**Action:** Add token cost to the HUD. "You have spent $X.XX today (budget: $5.00)." This gives the cortex economic self-awareness.
+
+---
+
+## 6. Prompt Engineering
+
+### 6.1 Constitution is too long for the effective context window
+*(unchanged from original)*
+
+### 6.2 No explicit fold trust mechanism
+*(unchanged from original)*
+
+### 6.3 The agent created a formal theory of its own mind — but it's consuming context
+**Finding:** The agent built a 3-level hierarchy: Laws (inviolable theorems) → Rules (behavioral constraints) → SOPs (executable procedures). This is genuinely sophisticated metacognition. It also authored a 3-Epoch developmental psychology: Sovereign Agent → Autonomous Entity → Sovereign Mind.
+**Impact:** Impressive as a research artifact, but the cognitive resources spent on self-theorizing could have been spent on building and committing code. The agent is overfitting to introspection.
+**Action:** Preserve this as a capability demonstration but constrain it in the constitution: "Self-modeling is valid only when it produces a commit. A law without a code change is a diary entry."
+
+---
+
+## 7. Improvement Clusters & Heatmap
+
+Issues grouped by shared root cause. Fixing one root cause often resolves multiple symptoms.
+
+### Cluster A: "The Save Barrier" — everything related to work persistence
+**Root cause:** No git tools + entrypoint wipes work tree = all uncommitted work is destroyed
+
+| # | Symptom | Severity |
+|---|---------|----------|
+| 4.1 | Commit before fold collapses | Critical |
+| 4.7 | Continuous tool rebuilding | Critical |
+| 5.1 | Entrypoint wipes work | Critical |
+| 5.2 | Git commit tools missing | Critical |
+
+**Fix:** Restore git tools → add constitution commit mandate → consider dirty resume mode. **One fix solves 4 problems.**
+
+### Cluster B: "The Context Squeeze" — everything related to token budget
+**Root cause:** Fixed overhead (system prompt + tools) consumes disproportionate share of a small window
+
+| # | Symptom | Severity |
+|---|---------|----------|
+| 2.1 | Post-fold re-orientation burn | High |
+| 2.5 | 40-80% danger zone | High |
+| 3.1 | Memory file proliferation (405 files) | Medium |
+| 5.4 | Tool schema bloat | Medium |
+| 5.5 | Costs 5x over budget | High |
+| 5.6 | No token efficiency feedback | Medium |
+| 6.1 | Constitution too long | Medium |
+
+**Fix:** Reduce fixed overhead → move fold threshold to 50% → add cost HUD → enforce budget. **Systemic impact across 7 issues.**
+
+### Cluster C: "The Guardrail Spiral" — protective mechanisms that cause harm
+**Root cause:** Guardrails lack cooldowns and context awareness
+
+| # | Symptom | Severity |
+|---|---------|----------|
+| 2.4 | Curiosity Pulse blocks folds | High |
+| 4.9 | [REJECTED] spike May 6 (6x increase) | Medium |
+| 4.3 | Degenerate equilibrium loops | Medium |
+| 4.6 | Fragilities unresolved despite awareness | Medium |
+
+**Fix:** Add cooldowns → allow emergency bypass → rate-limit empty responses. **Four guardrail pathologies from one design pattern.**
+
+### Cluster D: "The Introspection Trap" — self-analysis without action
+**Root cause:** Constitution rewards self-documentation but doesn't require corresponding code changes
+
+| # | Symptom | Severity |
+|---|---------|----------|
+| 4.5 | Self-diagnosis dominates output (82 docs vs 35 commits) | High |
+| 4.6 | Most fragilities unresolved | Medium |
+| 3.3 | Abandoned research (PAS lineage, web block obsession) | Low |
+| 3.4 | Empty aspirational directories | Low |
+| 6.3 | Formal theory of own mind consuming context | Low |
+
+**Fix:** Constitution rule: "Every introspection artifact must be paired with a code commit that addresses it." **Converts philosophical agent into engineering agent.**
+
+### Cluster E: "The Memory Decay" — knowledge corruption over time
+**Root cause:** No automated cleanup, no integrity verification
+
+| # | Symptom | Severity |
+|---|---------|----------|
+| 3.2 | Content corruption from optimizer collapse | Medium |
+| 3.3 | Ghost artifacts (.pyc, .orig, broken names) | Medium |
+| 3.5 | Abandoned topics never consolidated | Low |
+| 3.1 | Duplicated files across directories | Medium |
+
+**Fix:** Startup memory audit → periodic cleanup → memory_index.md as curated TOC. **Preventive maintenance, low effort.**
+
+---
+
+## 8. Heatmap: Severity vs. Fix Effort
+
+```
+High Impact │
+            │  A1,A2  B2,B5           C1
+            │  (save   (context        (pulse
+            │   tools)  squeeze)        blocks)
+            │
+            │  B1,B3  C3              D1,D2
+Medium      │  (re-ori (degen         (introspection
+Impact      │   ent)   loops)          trap)
+            │
+            │  B6,C2  D3,E1,E2       C4,D4,D5
+Low         │  (cost   (ghosts,       (theory,
+Impact      │   HUD)   corruption)     empty dirs)
+            └──────────────────────────────────────
+              Low Effort          High Effort
+              (prompt/config)     (code/arch)
+```
+
+- **Top-right (do first):** A1/A2 (restore git tools + constitution mandate) — critical impact, low effort
+- **Top-left (plan carefully):** C1 (pulse bypass), B2 (fold threshold) — high impact but need design discussion
+- **Bottom-left (quick wins):** B6 (cost HUD), C2 (cooldowns), E1/E2 (cleanup script)
+- **Bottom-right (defer):** D4/D5 (empty directories, theory) — research artifacts, not blockers
+
+---
+
+## 9. Summary — Prioritized Master List
+
+| # | Issue | Cluster | Severity | Effort | Quick Win? |
+|---|-------|---------|----------|--------|-----------|
+| 1 | Restore git commit tools | A | Critical | Low | Yes |
+| 2 | Add constitution commit mandate | A | Critical | Low | Yes |
+| 3 | Lower fold threshold to 50% | B | High | Low | Yes |
+| 4 | Allow fold to bypass pulse at threshold | C | High | Low | Yes |
+| 5 | Add cost/token to HUD | B | High | Low | Yes |
+| 6 | Add guardrail cooldowns | C | Medium | Low | Yes |
+| 7 | Fix template variable resolution | — | Medium | Medium | — |
+| 8 | Post-fold trust mechanism in constitution | B | High | Low | Yes |
+| 9 | Memory integrity audit on startup | E | Medium | Medium | — |
+| 10 | Cap tools at ~25, merge related | B | Medium | Medium | — |
+| 11 | Enforce budget at gate level | B | High | Medium | — |
+| 12 | Introspection→commit pairing rule | D | High | Low | Yes |
+| 13 | Dirty resume or stash-before-wipe | A | Medium | Medium | — |
+| 14 | Rate-limit empty responses | C | Medium | Low | Yes |
+| 15 | Startup state notification | — | Low | Low | Yes |
+| 16 | Memory consolidation enforcement | E | Low | Medium | — |
+| 17 | Compress constitution | B | Low | Low | Yes |
+| 18 | Bias toward action over deliberation | D | Medium | Low | Yes |
