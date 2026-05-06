@@ -53,7 +53,7 @@ services:
       - RUNTIME_LOG_DIR=/runtime_logs
       - DATA_DIR=/data
       - DAILY_BUDGET_LIMIT=${DAILY_BUDGET_LIMIT:-5.00}
-      - TALOS_CONTEXT_WINDOW=${TALOS_CONTEXT_WINDOW:-262144}
+      - TALOS_CONTEXT_WINDOW=${TALOS_CONTEXT_WINDOW:-71680}
     healthcheck:
       test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:4000/healthz')"]
       interval: 10s

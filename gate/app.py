@@ -31,7 +31,7 @@ LOG_DIR = Path(os.getenv("RUNTIME_LOG_DIR", "/runtime_logs"))
 LEDGER_FILE = MEMORY_DIR / "financial_ledger.json"
 TOGETHERAI_API_KEY = os.getenv("TOGETHERAI_API_KEY", "")
 DAILY_BUDGET_LIMIT = float(os.getenv("DAILY_BUDGET_LIMIT", "5.00"))
-LOCAL_CONTEXT_WINDOW = int(os.getenv("TALOS_CONTEXT_WINDOW", "262144"))
+LOCAL_CONTEXT_WINDOW = int(os.getenv("TALOS_CONTEXT_WINDOW", "71680"))
 AUDIO_API_URL = os.getenv(
     "AUDIO_API_URL", "https://api.together.xyz/v1/audio/transcriptions"
 )
