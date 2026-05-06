@@ -172,24 +172,12 @@ The agency ratio ("I will" / "I should") peaked at May 1 (1.45) and May 6 (1.46)
 ### 5.4 Tool schema bloat (48 tools = ~150KB of schemas)
 *(unchanged from original)*
 
-### 5.5 Financial reality — costs 5x higher than budget
-**Finding:** The financial ledger shows actual costs of $276.57 over 6 days against a $5.00/day budget:
+### 5.5 No token efficiency feedback loop
+**Finding:** The cortex knows its context_pct but has no visibility into token consumption volume. It consumes tokens without efficiency awareness. There's no incentive structure for conservation. The gate tracks a token counter internally but this is not surfaced to the cortex.
+**Impact:** The agent cannot self-regulate token usage. During degenerate equilibrium phases, it burns through context with rapid retries unaware of the waste.
+**Action:** Surface token consumption in the HUD. "Tokens consumed this cycle: N." This gives the cortex resource awareness.
 
-| Day | Cost | % of Budget |
-|-----|------|------------|
-| May 1 | $9.03 | 181% |
-| May 2 | $80.84 | 1,617% |
-| May 3 | $61.67 | 1,233% |
-| May 4 | $44.57 | 891% |
-| May 5 | $41.18 | 824% |
-| May 6 | $39.28 | 786% |
-
-**Impact:** The budget limit exists in code but is not enforced. 273M tokens consumed.
-**Action:** Implement hard budget enforcement at the gate level. Reject requests when daily budget is exceeded. This would have forced the cortex to be more token-efficient.
-
-### 5.6 No token efficiency feedback loop
-**Finding:** The cortex knows its context_pct but has no visibility into cost. It consumes tokens without economic awareness. There's no incentive structure for efficiency.
-**Action:** Add token cost to the HUD. "You have spent $X.XX today (budget: $5.00)." This gives the cortex economic self-awareness.
+Note: The model runs locally through Ollama (no cloud API key configured), so the gate's internal cost counter reflects theoretical pricing, not actual API billing. Budget enforcement is still useful as a token conservation mechanism regardless of billing model.
 
 ---
 
@@ -233,11 +221,10 @@ Issues grouped by shared root cause. Fixing one root cause often resolves multip
 | 2.5 | 40-80% danger zone | High |
 | 3.1 | Memory file proliferation (405 files) | Medium |
 | 5.4 | Tool schema bloat | Medium |
-| 5.5 | Costs 5x over budget | High |
-| 5.6 | No token efficiency feedback | Medium |
+| 5.5 | No token efficiency feedback | Medium |
 | 6.1 | Constitution too long | Medium |
 
-**Fix:** Reduce fixed overhead → move fold threshold to 50% → add cost HUD → enforce budget. **Systemic impact across 7 issues.**
+**Fix:** Reduce fixed overhead → move fold threshold to 50% → surface token usage in HUD. **Systemic impact across 6 issues.**
 
 ### Cluster C: "The Guardrail Spiral" — protective mechanisms that cause harm
 **Root cause:** Guardrails lack cooldowns and context awareness
@@ -282,7 +269,7 @@ Issues grouped by shared root cause. Fixing one root cause often resolves multip
 
 ```
 High Impact │
-            │  A1,A2  B2,B5           C1
+            │  A1,A2  B2              C1
             │  (save   (context        (pulse
             │   tools)  squeeze)        blocks)
             │
@@ -290,8 +277,8 @@ High Impact │
 Medium      │  (re-ori (degen         (introspection
 Impact      │   ent)   loops)          trap)
             │
-            │  B6,C2  D3,E1,E2       C4,D4,D5
-Low         │  (cost   (ghosts,       (theory,
+            │  B5,C2  D3,E1,E2       C4,D4,D5
+Low         │  (token  (ghosts,       (theory,
 Impact      │   HUD)   corruption)     empty dirs)
             └──────────────────────────────────────
               Low Effort          High Effort
@@ -300,7 +287,7 @@ Impact      │   HUD)   corruption)     empty dirs)
 
 - **Top-right (do first):** A1/A2 (restore git tools + constitution mandate) — critical impact, low effort
 - **Top-left (plan carefully):** C1 (pulse bypass), B2 (fold threshold) — high impact but need design discussion
-- **Bottom-left (quick wins):** B6 (cost HUD), C2 (cooldowns), E1/E2 (cleanup script)
+- **Bottom-left (quick wins):** B5 (token HUD), C2 (cooldowns), E1/E2 (cleanup script)
 - **Bottom-right (defer):** D4/D5 (empty directories, theory) — research artifacts, not blockers
 
 ---
@@ -313,13 +300,13 @@ Impact      │   HUD)   corruption)     empty dirs)
 | 2 | Add constitution commit mandate | A | Critical | Low | Yes |
 | 3 | Lower fold threshold to 50% | B | High | Low | Yes |
 | 4 | Allow fold to bypass pulse at threshold | C | High | Low | Yes |
-| 5 | Add cost/token to HUD | B | High | Low | Yes |
+| 5 | Surface token usage in HUD | B | High | Low | Yes |
 | 6 | Add guardrail cooldowns | C | Medium | Low | Yes |
 | 7 | Fix template variable resolution | — | Medium | Medium | — |
 | 8 | Post-fold trust mechanism in constitution | B | High | Low | Yes |
 | 9 | Memory integrity audit on startup | E | Medium | Medium | — |
 | 10 | Cap tools at ~25, merge related | B | Medium | Medium | — |
-| 11 | Enforce budget at gate level | B | High | Medium | — |
+| 11 | Surface token tracking at gate level | B | Medium | Medium | — |
 | 12 | Introspection→commit pairing rule | D | High | Low | Yes |
 | 13 | Dirty resume or stash-before-wipe | A | Medium | Medium | — |
 | 14 | Rate-limit empty responses | C | Medium | Low | Yes |
