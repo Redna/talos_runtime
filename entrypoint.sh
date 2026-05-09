@@ -65,6 +65,8 @@ cp -a /spine_backup/. /app/spine/
 chmod -x /app/spine/*.py
 echo "Purging stale __pycache__..."
 rm -rf /app/spine/__pycache__/
+echo "Running memory integrity audit..."
+python3 /app/scripts/startup_audit.py || true
 
 chown -R "$USER_NAME":"$GROUP_ID" /app
 # Ensure /memory exists and is writable by talos before chown
