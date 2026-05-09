@@ -23,8 +23,27 @@ if [ -d /app/.git ]; then
     cd /app
     git fetch origin "$GIT_BRANCH"
     git checkout -f "$GIT_BRANCH"
+
+    # Save uncommitted work before reset
+    STASHED=0
+    if ! git diff --quiet || ! git diff --cached --quiet || [ -n "$(git ls-files --others --exclude-standard)" ]; then
+        if git stash push -m "auto-saved on restart $(date -Iseconds 2>/dev/null || date +%Y-%m-%dT%H:%M:%S%z)"; then
+            STASHED=1
+            echo "[Entrypoint] Stashed uncommitted changes before reset"
+        fi
+    fi
+
     git reset --hard "origin/$GIT_BRANCH"
     git clean -fd
+
+    # Restore saved work
+    if [ "$STASHED" = "1" ]; then
+        if git stash pop; then
+            echo "[Entrypoint] Recovered uncommitted files from a sudden crash. Commit them immediately."
+        else
+            echo "[Entrypoint] WARNING: stash pop had conflicts — uncommitted work left in stash"
+        fi
+    fi
 else
     echo "[Entrypoint] Fresh volume, cloning repo..."
     rm -rf /app/.[!.]* /app/* 2>/dev/null
