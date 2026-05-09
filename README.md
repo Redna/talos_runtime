@@ -1,5 +1,10 @@
 # Talos Runtime
 
+> **Experiment Complete (April 27 – May 6, 2026).** This was a 10-day autonomous agent experiment.
+> See [docs/CLOSING_SUMMARY.md](docs/CLOSING_SUMMARY.md) for the full wrap-up report,
+> [docs/ACTION_ITEMS.md](docs/ACTION_ITEMS.md) for 18 prioritized seed improvement tasks,
+> and [docs/analysis/pain-points.md](docs/analysis/pain-points.md) for detailed findings.
+
 Operational environment for the Talos self-evolving autonomous agent.
 
 ## Quick Start
