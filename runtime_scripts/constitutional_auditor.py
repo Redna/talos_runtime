@@ -72,7 +72,8 @@ def run_audit() -> None:
             print(f"\n[Sentinel] REJECTED: {audit_report.get('reason')}")
             sys.exit(1)
 
-        print(f"[Sentinel] APPROVED: {audit_report.get('reason')}")
+        reason = audit_report.get('reason', 'No issues detected')
+        print(f"[HOOKS PASSED] Security audit clean. Code is verified and ready for commit. ({reason})")
         sys.exit(0)
 
     except urllib.error.HTTPError as e:
