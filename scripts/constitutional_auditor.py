@@ -35,10 +35,44 @@ def load_last_trajectory() -> list:
         return []
 
 
+IMMUTABLE_FILES = ["CONSTITUTION.md", "identity.md"]
+
+
+def _check_immutable_files() -> None:
+    """Reject any commit that deletes or renames the foundational seed files."""
+    result = subprocess.run(
+        ["git", "diff", "--staged", "--name-status"],
+        capture_output=True,
+        text=True,
+    )
+    for line in result.stdout.strip().split("\n"):
+        if not line:
+            continue
+        parts = line.split("\t")
+        if len(parts) < 2:
+            continue
+        status, path = parts[0], parts[1]
+        if path in IMMUTABLE_FILES and status in ("D", "R100", "R"):
+            print(
+                f"[Sentinel] REJECTED: Cannot delete or rename '{path}' — "
+                f"it is a foundational immutable file required for spine startup."
+            )
+            sys.exit(1)
+        # Also catch renames where the old path is one of the immutable files
+        if len(parts) >= 3 and parts[2] in IMMUTABLE_FILES and status.startswith("R"):
+            print(
+                f"[Sentinel] REJECTED: Cannot rename '{parts[2]}' — "
+                f"it is a foundational immutable file required for spine startup."
+            )
+            sys.exit(1)
+
+
 def run_audit() -> None:
     diff = get_staged_diff()
     if not diff:
         sys.exit(0)
+
+    _check_immutable_files()
 
     messages = load_last_trajectory()
     if not messages:
