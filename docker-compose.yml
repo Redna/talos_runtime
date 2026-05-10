@@ -8,6 +8,7 @@ services:
       - seccomp:unconfined
     env_file: .env
     environment:
+      - PYTHONUNBUFFERED=1
       - TALOS_REPO_DIR=/app
       - PUID=${PUID:-1000}
       - PGID=${PGID:-1000}

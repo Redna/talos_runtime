@@ -95,6 +95,7 @@ chown -R "$USER_NAME":"$GROUP_ID" /memory
 mkdir -p /spine/events /spine/trajectories
 chown -R "$USER_NAME":"$GROUP_ID" /spine/events /spine/trajectories
 
+rm -f /spine/.paused /spine/.single_step /spine/state.json
 echo "$COMMIT" > /spine/last_good_commit
 echo "[Entrypoint] Recorded good commit: $COMMIT"
 
