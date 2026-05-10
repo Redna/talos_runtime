@@ -19,35 +19,28 @@ if ! getent passwd "$USER_ID" > /dev/null 2>&1; then useradd -u "$USER_ID" -g "$
 USER_NAME=$(getent passwd "$USER_ID" | cut -d: -f1)
 
 if [ -d /app/.git ]; then
-    echo "[Entrypoint] Existing repo found, pulling latest..."
+    echo "[Entrypoint] Existing repo found, updating seed reference..."
     cd /app
     git fetch origin "$GIT_BRANCH"
-    git checkout -f "$GIT_BRANCH"
 
-    # Save uncommitted work before reset
+    # Save uncommitted work before any branch switching
     STASHED=0
     if ! git diff --quiet || ! git diff --cached --quiet || [ -n "$(git ls-files --others --exclude-standard)" ]; then
         if git stash push -m "auto-saved on restart $(date -Iseconds 2>/dev/null || date +%Y-%m-%dT%H:%M:%S%z)"; then
             STASHED=1
-            echo "[Entrypoint] Stashed uncommitted changes before reset"
+            echo "[Entrypoint] Stashed uncommitted changes before restart"
         fi
     fi
 
-    git reset --hard "origin/$GIT_BRANCH"
+    # Update the local seed branch to match remote (spine fixes, etc.)
+    git checkout -f "$GIT_BRANCH" 2>/dev/null || true
+    git reset --hard "origin/$GIT_BRANCH" 2>/dev/null || true
     git clean -fd
-
-    # Restore saved work
-    if [ "$STASHED" = "1" ]; then
-        if git stash pop; then
-            echo "[Entrypoint] Recovered uncommitted files from a sudden crash. Commit them immediately."
-        else
-            echo "[Entrypoint] WARNING: stash pop had conflicts — uncommitted work left in stash"
-        fi
-    fi
 else
     echo "[Entrypoint] Fresh volume, cloning repo..."
     rm -rf /app/.[!.]* /app/* 2>/dev/null
     git clone -b "$GIT_BRANCH" "$GIT_REPO" /app
+    STASHED=0
 fi
 
 # Derive the volatile branch name from the seed (defaults to feat/talos)
@@ -55,25 +48,34 @@ VOLATILE_BRANCH=${VOLATILE_BRANCH:-feat/talos}
 echo "[Entrypoint] Establishing local volatile branch: $VOLATILE_BRANCH"
 cd /app
 
-# If this is a restart (existing repo), preserve the volatile branch pointer
-# but reset its working tree to the clean seed. This discards any
-# local agent modifications that may have corrupted the state, while
-# keeping the commit history on origin/feat/talos available for the
-# agent to pull later if needed.
+# On restart: preserve the working branch and its commit history.
+# Only create a fresh branch from seed if it doesn't exist yet.
 if git rev-parse --verify "$VOLATILE_BRANCH" > /dev/null 2>&1; then
-    git checkout -f "$GIT_BRANCH"
-    git checkout -B "$VOLATILE_BRANCH"
+    echo "[Entrypoint] Restoring existing working branch: $VOLATILE_BRANCH"
+    git checkout "$VOLATILE_BRANCH"
 else
+    echo "[Entrypoint] Creating new volatile branch: $VOLATILE_BRANCH from seed"
     git checkout -b "$VOLATILE_BRANCH"
 fi
 
-# Prevent accidental merge of old volatile branch state from remote on startup.
-# The agent can still git fetch explicitly, but this removes the immediate
-# temptation of an existing origin/feat/talos tracking branch.
-git update-ref -d "refs/remotes/origin/$VOLATILE_BRANCH" 2>/dev/null || true
-# Also strip the legacy feat/talos and the new v2 push target.
-git update-ref -d "refs/remotes/origin/feat/talos" 2>/dev/null || true
-git update-ref -d "refs/remotes/origin/feat/talos-v2" 2>/dev/null || true
+# Try to pull remote state for the volatile branch if available
+if git fetch origin "$VOLATILE_BRANCH" 2>/dev/null; then
+    if git merge-base --is-ancestor HEAD "origin/$VOLATILE_BRANCH" 2>/dev/null; then
+        echo "[Entrypoint] Fast-forwarding to remote $VOLATILE_BRANCH..."
+        git merge --ff-only "origin/$VOLATILE_BRANCH" 2>/dev/null || true
+    else
+        echo "[Entrypoint] Local $VOLATILE_BRANCH has diverged from remote — keeping local history"
+    fi
+fi
+
+# Restore saved uncommitted work onto the volatile branch
+if [ "$STASHED" = "1" ]; then
+    if git stash pop; then
+        echo "[Entrypoint] Recovered uncommitted files from a sudden crash. Commit them immediately."
+    else
+        echo "[Entrypoint] WARNING: stash pop had conflicts — uncommitted work left in stash"
+    fi
+fi
 
 echo "[Entrypoint] Branch: $(git -C /app rev-parse --abbrev-ref HEAD)"
 COMMIT=$(git -C /app rev-parse HEAD)
