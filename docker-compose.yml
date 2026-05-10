@@ -86,42 +86,6 @@ services:
     networks:
       - talos_net
 
-  llamacpp:
-    image: ${LLAMACPP_IMAGE:-ghcr.io/ggml-org/llama.cpp:server-rocm}
-    container_name: llamacpp
-    shm_size: 16G
-    cap_add:
-      - SYS_PTRACE
-    security_opt:
-      - seccomp:unconfined
-    ipc: host
-    volumes:
-      - ./models:/models
-    ports:
-      - "8000:8080"
-    command:
-      - -m
-      - /models/${DEFAULT_MODEL}
-      - --host
-      - "0.0.0.0"
-      - --port
-      - "8080"
-      - -ngl
-      - "999"
-      - -c
-      - "65536"
-      - --no-warmup
-      - --flash-attn
-      - "on"
-      - --temp
-      - "1.0"
-      - --top-p
-      - "0.95"
-      - --top-k
-      - "64"
-    networks:
-      - talos_net
-
 networks:
   talos_net:
     driver: bridge
