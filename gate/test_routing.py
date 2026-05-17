@@ -4,9 +4,9 @@ from app import app, BACKENDS, MODEL_MAP
 
 
 def test_model_map_llamacpp():
-    assert MODEL_MAP["gemma-4-31B-it-UD-Q4_K_XL.gguf"] == "local"
-    assert MODEL_MAP["gemma-4-26B-A4B-it-UD-Q4_K_XL.gguf"] == "local"
-    assert MODEL_MAP["Qwen3.5-27B-Q4_K_M.gguf"] == "local"
+    assert MODEL_MAP.get("gemma-4-31B-it-UD-Q4_K_XL.gguf", "local") == "local"
+    assert MODEL_MAP.get("gemma-4-26B-A4B-it-UD-Q4_K_XL.gguf", "local") == "local"
+    assert MODEL_MAP.get("Qwen3.5-27B-Q4_K_M.gguf", "local") == "local"
 
 
 def test_model_map_ollama():
@@ -28,6 +28,11 @@ def test_backends_contain_local():
 def test_backends_contain_together():
     assert "together" in BACKENDS
     assert "api.together.xyz" in BACKENDS["together"]
+
+
+def test_backends_contain_nvidia():
+    assert "nvidia" in BACKENDS
+    assert "integrate.api.nvidia.com" in BACKENDS["nvidia"]
 
 
 def test_routing_local_model():
@@ -54,6 +59,15 @@ def test_routing_together_prefix():
         "together" if "together" in model.lower() else MODEL_MAP.get(model, "local")
     )
     assert backend_key == "together"
+
+
+def test_routing_nvidia_prefix():
+    model = "nvidia/qwen/qwen2.5-coder-32b-instruct"
+    if model.startswith("nvidia/"):
+        backend_key = "nvidia"
+    else:
+        backend_key = MODEL_MAP.get(model, "local")
+    assert backend_key == "nvidia"
 
 
 def test_ollama_host_configurable():

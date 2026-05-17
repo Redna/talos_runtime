@@ -30,6 +30,7 @@ MEMORY_DIR = Path(os.getenv("MEMORY_DIR", "/memory"))
 LOG_DIR = Path(os.getenv("RUNTIME_LOG_DIR", "/runtime_logs"))
 LEDGER_FILE = MEMORY_DIR / "financial_ledger.json"
 TOGETHERAI_API_KEY = os.getenv("TOGETHERAI_API_KEY", "")
+NVIDIA_API_KEY = os.getenv("NVIDIA_API_KEY", "")
 DAILY_BUDGET_LIMIT = float(os.getenv("DAILY_BUDGET_LIMIT", "5.00"))
 LOCAL_CONTEXT_WINDOW = int(os.getenv("TALOS_CONTEXT_WINDOW", "71680"))
 AUDIO_API_URL = os.getenv(
@@ -189,6 +190,7 @@ BACKENDS = {
     "together": "https://api.together.xyz/v1/chat/completions",
     "together_images": "https://api.together.xyz/v1/images/generations",
     "together_audio": "https://api.together.xyz/v1/audio/transcriptions",
+    "nvidia": "https://integrate.api.nvidia.com/v1/chat/completions",
 }
 
 
@@ -376,6 +378,8 @@ async def chat_completions(request: Request, background_tasks: BackgroundTasks):
     backend_key = "local"
     if "together" in model.lower():
         backend_key = "together"
+    elif model.startswith("nvidia/"):
+        backend_key = "nvidia"
     else:
         backend_key = MODEL_MAP.get(model, "local")
 
@@ -415,9 +419,13 @@ async def chat_completions(request: Request, background_tasks: BackgroundTasks):
     headers = {"Content-Type": "application/json"}
     if backend_key == "together" and TOGETHERAI_API_KEY:
         headers["Authorization"] = f"Bearer {TOGETHERAI_API_KEY}"
+    if backend_key == "nvidia" and NVIDIA_API_KEY:
+        headers["Authorization"] = f"Bearer {NVIDIA_API_KEY}"
 
     if backend_key == "together" and model.startswith("together_ai/"):
         body["model"] = model.replace("together_ai/", "")
+    if backend_key == "nvidia" and model.startswith("nvidia/"):
+        body["model"] = model.replace("nvidia/", "", 1)
 
     resolved_model = body.get("model", model)
     if backend_key == "ollama":
