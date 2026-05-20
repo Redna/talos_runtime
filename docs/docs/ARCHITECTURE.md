@@ -65,7 +65,7 @@ graph LR
 
 - The Spine manages the LLM stream, enforces the constitution, and supervises the Cortex process
 - The Cortex executes the ReAct loop, calls tools, and self-modifies code
-- All communication occurs via the 7 JSON-RPC methods (think, tool_result, request_fold, request_restart, send_message, emit_event, get_state)
+- All communication occurs via 9 JSON-RPC methods (generate, stateless_generate, think, tool_result, request_fold, request_restart, send_message, emit_event, get_state)
 
 ### 2.3 The Frozen Stream Invariant
 
@@ -107,7 +107,9 @@ The Spine listens on `/tmp/spine.sock` and accepts JSON-RPC 2.0 requests from th
 
 | Method | Direction | Purpose |
 |---|---|---|
-| `think` | Cortex → Spine | LLM call with focus, tools, HUD |
+| `generate` | Cortex → Spine | State-accumulating loop pass with focus, tools, HUD (formerly `think`) |
+| `stateless_generate` | Cortex → Spine | Raw pass-through to gate — no stream/HUD/fold mutation |
+| `think` | Cortex → Spine | Backward-compat alias for `generate` |
 | `tool_result` | Cortex → Spine | Return tool execution result |
 | `request_fold` | Cortex → Spine | Request context compression |
 | `request_restart` | Cortex → Spine | Restart Cortex process |
@@ -121,8 +123,9 @@ The Spine owns the message stream and handles:
 
 - **Payload construction:** system prompt + shed messages + focus + HUD piggybacked onto last message
 - **Shedding:** Messages 0 and 1 (system + init) are frozen. Beyond the active window (last 5 turns × 2 messages), assistant tool parameters are stripped and tool outputs truncated to 500 chars
-- **Folding:** When context exceeds 85%, the Spine forces `fold_context` as the only available tool. The stream is replaced with frozen prefix + synthesis message
+- **Folding:** Escalating auto-fold guard: advisory at 60%, forced at 75%, emergency at 85%. The stream is replaced with frozen prefix + synthesis message
 - **HUD construction:** `[HUD | Context: X% | Turn: Y | Tokens: Z | Memory: N keys]` piggybacked onto the last message, never as a separate turn
+- **Stateless pass-through:** `stateless_generate` bypasses the stream entirely — no payload construction, no HUD, no fold triggers, no garbage rejection. Used by delegation sub-agents and memory consolidation. Only lifetime token budget crosses the stateless boundary.
 
 ### 3.4 Constitution Management
 
@@ -160,58 +163,65 @@ The Cortex is the agent's mind — a Python process that runs the ReAct loop. It
 while True:
     1. Load state and memory
     2. Build HUD data
-    3. Call spine.think(focus, tools, hud) → get assistant message + tool calls
-    4. Execute tool calls
-    5. Return tool results via spine.tool_result()
+    3. Call client.generate(focus, tools, hud) → get assistant message + tool calls
+    4. Execute tool calls (with optional delegation to stateless sub-agents)
+    5. Return tool results via client.tool_result()
     6. Repeat
 ```
 
 ### 4.2 Tool Domains
 
-**Domain A: Executive Control**
+Tools are organized into namespaced **buckets** (via `ToolRegistry._buckets`). `get_bucket_schemas()` filters tool visibility by namespace — the `core` bucket is always included for system survival. The `delegation` plugin adds sub-agent worker routing.
+
+**Domain A: Executive Control** (`tools/executive.py`, bucket: `core`)
 
 | Tool | Function |
 |---|---|
-| `set_focus(objective)` | Updates current_focus and triggers status event |
+| `set_focus(objective)` | Updates current_focus and persists to ledger |
 | `resolve_focus(synthesis)` | Clears focus and logs completion summary |
-| `fold_context(delta_synthesis)` | Emergency compression using Delta Pattern |
-| `reflect(status, sleep_duration)` | Metabolic rest, outputs synthesized thought |
+| `fold_context(synthesis, ...)` | Context compression with structured handover |
+| `reflect(status, sleep_duration)` | Pause (up to 1800s), wakes on Telegram or `.wake` sentinel |
+| `merge_memory_files(sources, dest, focus)` | Synthesizes memory files via `stateless_generate` pipe |
 
-**Domain B: Code Surgery**
+**Domain B: Code Surgery** (`tools/file_ops.py`, bucket: `core`)
 
 | Tool | Function |
 |---|---|
-| `generate_repo_map()` | Scans repository, returns index of symbols |
-| `replace_symbol(path, symbol_name, new_code)` | AST-based symbol replacement |
-| `write_file(path, content)` | Atomic file creation or overwrite |
 | `read_file(path, start_line, end_line)` | Progressive file reading |
-| `patch_file(path, diff)` | Apply unified diff |
+| `write_file(path, content)` | Atomic file creation or overwrite |
+| `patch_file(path, diff)` | Apply unified diff with multi-strip-level fallback |
+| `search_and_replace(path, old, new)` | Exact string match replacement |
+| `replace_block(path, old_block, new_block)` | Multi-line block replacement |
+| `search_code(query)` | `grep -rn` across the repository |
+| `list_files(path)` | Directory listing |
+| `delete_path(path)` | File or directory removal |
+| `bulk_rename(renames)` | Batch file renames |
+| `validate_patch(path, diff)` | Dry-run patch verification |
 
-**Domain C: On-Demand Memory**
-
-| Tool | Function |
-|---|---|
-| `store_fact(key, value)` | Store high-density insights (50 slot KV store) |
-| `recall_fact(key)` | Retrieve by exact or partial key match |
-| `list_memory_keys()` | Return all memory keys |
-| `search_memory(query)` | Search memory keys and values |
-| `forget_memory(key)` | Delete a memory entry, free a slot |
-
-**Domain D: Physical Interfaces**
+**Domain C: Physical Interfaces** (`tools/physical.py`, bucket: `core`)
 
 | Tool | Function |
 |---|---|
-| `bash_command(command)` | Shell execution. Rejects `--no-verify` and equivalent flags |
+| `bash_command(command)` | Shell execution (60s timeout, blocked flags filter) |
 | `send_message(text)` | Communication with creator (Telegram) |
-| `request_restart(reason)` | Graceful termination. Rejected if uncommitted changes exist |
+| `request_restart(reason)` | Graceful termination, rejected if uncommitted changes exist |
 
-**Domain E: Git Operations**
+**Domain D: Git Operations** (`tools/git_ops.py`, bucket: `core`)
 
 | Tool | Function |
 |---|---|
-| `git_commit(message)` | Stage all and commit |
-| `git_push()` | Push to remote |
-| `git_diff()` | Show working tree changes |
+| `git_commit(message)` | Stage all and commit (pre-commit hooks enforced) |
+| `git_push()` | Push to remote (protected branches blocked) |
+
+**Domain E: Delegation** (`plugins/delegation.py`, bucket: `delegation`)
+
+| Tool | Function |
+|---|---|
+| `delegate_task(instructions, target_file, buckets)` | Spawns isolated stateless sub-agent with restricted tool schemas via `stateless_generate`. Max 8 turns. |
+
+### 4.3 Dynamic Plugin Loading
+
+The `ToolRegistry.reload_plugins()` method scans `/app/cortex/plugins/*.py` at runtime using `importlib`. Plugin files use the standalone `@tool` decorator (from `tool_registry`) to mark functions as discoverable. The registry reads `is_registered_tool` and `tool_schema` attributes and registers them into the appropriate bucket (defaulting to the filename, overridable via `__bucket__` module attribute).
 
 ---
 

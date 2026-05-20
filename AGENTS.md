@@ -36,6 +36,8 @@ talos_runtime/                  ← This repo (infrastructure)
 ├── talos/                      ← Git submodule → agent repo
 │   ├── cortex/                 ← Agent source code
 │   │   ├── seed_agent.py       ← Main ReAct loop
+│   │   ├── tool_registry.py    ← Tool registration, bucketing, plugin loading
+│   │   ├── plugins/            ← Hot-reloadable tool plugins (delegation, etc.)
 │   │   └── __main__.py         ← Entry point for `python -m cortex`
 │   ├── spine/                  ← Spine implementation
 │   │   ├── ipc_server.py       ← Auto-fold guard (0.85 threshold)
@@ -206,11 +208,13 @@ Inside the `talos` container:
 
 ### IPC Protocol
 
-JSON-RPC over Unix domain socket. Key methods:
+JSON-RPC over Unix domain socket. 9 methods:
 
 | Method | Purpose |
 |---|---|
-| `think` | Core loop — builds payload, calls gate, adds assistant message to stream |
+| `generate` | State-accumulating loop pass — builds payload, calls gate, adds assistant message to stream (formerly `think`) |
+| `stateless_generate` | Raw pass-through to gate — no stream/HUD/fold mutation. Used by delegation sub-agents and memory consolidation |
+| `think` | Backward-compat alias for `generate` |
 | `tool_result` | Records tool call result |
 | `request_fold` | Triggers context fold |
 | `request_restart` | Requests Cortex restart |
@@ -221,7 +225,7 @@ JSON-RPC over Unix domain socket. Key methods:
 ### Spine Protection Layers
 
 1. **Startup Restore** (`entrypoint.sh`): Copies `/spine_backup/` → `/app/spine/` on every container start. The `/spine_backup` directory is baked into the Docker image, making the spine read-only by default.
-2. **Auto-Fold Guard** (`ipc_server.py` line 80): If `context_pct >= context_threshold_pct` (0.85), the Spine automatically calls `stream.fold()` before processing the next think request. Prevents context overflow.
+2. **Auto-Fold Guard** (`ipc_server.py`): Escalating thresholds — advisory at 60%, forced at 75%, emergency at 85%. The Spine automatically calls `stream.fold()` before processing the next request. Prevents context overflow.
 3. **Crash Revert** (`supervisor.py` line 178): If Cortex fails >3 times consecutively, the Spine reverts the `/app` git repo to `last_good_commit` (recorded at startup by `entrypoint.sh`).
 4. **Named Volume** (`talos_app`): The `/app` directory lives in a named Docker volume, so git history survives container restarts.
 

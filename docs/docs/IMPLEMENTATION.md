@@ -15,11 +15,13 @@ The agent runs as two Python processes inside the `talos` Docker container:
 
 Communication is exclusively via JSON-RPC over Unix domain socket (`/tmp/spine.sock`). Cortex never imports Spine internals; Spine never imports Cortex internals.
 
-### IPC Protocol (7 methods)
+### IPC Protocol (9 methods)
 
 | Method | Direction | Purpose |
 |--------|-----------|---------|
-| `think` | Cortex → Spine | Build payload, call Gate, add assistant message to stream |
+| `generate` | Cortex → Spine | State-accumulating loop pass with focus, tools, HUD (formerly `think`) |
+| `stateless_generate` | Cortex → Spine | Raw pass-through to gate — no stream/HUD/fold mutation |
+| `think` | Cortex → Spine | Backward-compat alias for `generate` |
 | `tool_result` | Cortex → Spine | Record tool call result in stream |
 | `request_fold` | Cortex → Spine | Trigger context fold with synthesis |
 | `request_restart` | Cortex → Spine | Request Cortex restart |
@@ -132,7 +134,7 @@ The `main()` function (line 103) runs the ReAct loop:
 while True:
     1. Check .paused / .single_step sentinels
     2. Build HUD from AgentState + context_pct + turn
-    3. Call spine.think(focus, tools, hud_data)
+    3. Call client.generate(focus, tools, hud_data) → get assistant message + tool calls
     4. Update state (tokens_consumed, error_streak reset)
     5. Batch rejection: if >MAX_TOOL_CALLS_PER_TURN (10), reject all
     6. For each tool call:
@@ -165,7 +167,14 @@ Synchronous Unix socket client. Key design:
 
 ### 3.4 Tool Registry (`cortex/tool_registry.py`)
 
-Decorator-based registration. `@registry.tool(description, parameters)` registers a function and generates OpenAI-compatible tool schema. `execute()` handles TypeError with detailed diagnostics (missing required params).
+Decorator-based registration with namespace bucketing. `@registry.tool(description, parameters, bucket="core")` registers a function and generates OpenAI-compatible tool schema. `ToolRegistry` supports:
+
+- **Bucketing:** `_buckets` dict maps namespace → tool names. `get_bucket_schemas(active_buckets)` filters schemas by namespace, always including `core`.
+- **Plugin loading:** `reload_plugins()` scans `/app/cortex/plugins/*.py` using `importlib`, discovers functions marked with standalone `@tool` decorator, and registers them dynamically.
+- **Max tools:** 60 tool cap enforced on registration.
+- **Analytics:** Per-tool call/error counts saved to `analytics.json`.
+- **Protected tools:** `set_focus`, `fold_context`, `read_file`, `write_file`, `git_commit` cannot be deregistered.
+- `execute()` handles TypeError with detailed diagnostics (missing required params).
 
 ### 3.5 Agent State (`cortex/state.py`)
 
@@ -176,19 +185,15 @@ Persisted to `/memory/.agent_state.json`. Tracks:
 
 ### 3.6 Tools (`cortex/tools/`)
 
-**Executive** (`executive.py`): `set_focus`, `resolve_focus`, `fold_context`, `reflect` (with sleep + `.wake` sentinel check), `audit_tools`, `verify_commit_readiness`, `check_constitution`
+**Executive** (`executive.py`): `set_focus`, `resolve_focus`, `fold_context`, `reflect` (with sleep + `.wake` sentinel check), `merge_memory_files` (synthesis via `stateless_generate` pipe instead of raw curl)
 
-**File Ops** (`file_ops.py`): `read_file`, `write_file`, `patch_file` (multi-strip-level: -p0, -p1, -p2), `list_files`, `delete_path`, `search_code` (grep -rn), `validate_patch`, `search_and_replace` (exact string match, counts occurrences), `bulk_rename`
+**File Ops** (`file_ops.py`): `read_file`, `write_file`, `patch_file` (multi-strip-level: -p0, -p1, -p2), `list_files`, `delete_path`, `search_code` (grep -rn), `validate_patch`, `search_and_replace` (exact string match, counts occurrences), `replace_block` (multi-line replacement), `bulk_rename`
 
 **Physical** (`physical.py`): `bash_command` (60s timeout, blocked flags filter), `send_message` (Telegram), `request_restart` (rejects if uncommitted changes)
 
-**Git Ops** (`git_ops.py`): `git_commit` (checks `--cached --quiet` first), `git_checkout` (blocks protected branches), `git_push` (blocks protected branches)
+**Git Ops** (`git_ops.py`): `git_commit` (checks `--cached --quiet` first), `git_push` (blocks protected branches)
 
-**Guards** (`guards.py`): 
-- `PROTECTED_CORTEX_FILES`: Only `spine_client.py` is protected
-- `BLOCKED_FLAGS`: `--no-verify`, `--no-gpg-sign`, etc.
-- `PROTECTED_BRANCHES`: main, master, origin/main, origin/master
-- `DANGEROUS_PATTERNS`: Regex for rm -rf /, mkfs, reverse shells, chmod -R /, hook removal
+**Plugins** (`plugins/delegation.py`): `delegate_task` — isolated sub-agent worker loop via `stateless_generate` with restricted tool schemas (max 8 turns)
 
 ---
 
