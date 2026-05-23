@@ -14,6 +14,11 @@ services:
     volumes:
       - sentinel_ca:/root/.mitmproxy
       - talos_app:/app:ro
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import socket; s = socket.socket(); s.connect(('localhost', 8080))"]
+      interval: 5s
+      timeout: 2s
+      retries: 5
 
   talos:
     build:
@@ -50,7 +55,7 @@ services:
       - talos_internal
     depends_on:
       sentinel:
-        condition: service_started
+        condition: service_healthy
       gate:
         condition: service_healthy
 

@@ -23,6 +23,19 @@ echo "$USER_NAME ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/talos
 echo "Defaults env_keep += \"http_proxy https_proxy all_proxy no_proxy\"" >> /etc/sudoers.d/talos
 chmod 0440 /etc/sudoers.d/talos
 
+# Wait for Sentinel Proxy to be resolvable and reachable
+if [ -n "$http_proxy" ]; then
+    PROXY_HOST=$(echo "$http_proxy" | sed -E 's/http:\/\/([^:]+):.*/\1/')
+    echo "[Entrypoint] Waiting for Sentinel Proxy ($PROXY_HOST) to be ready..."
+    for i in $(seq 1 30); do
+        if getent hosts "$PROXY_HOST" > /dev/null 2>&1; then
+            echo "[Entrypoint] Sentinel Proxy DNS resolved."
+            break
+        fi
+        sleep 1
+    done
+fi
+
 # Wait for and install Sentinel Root CA if available
 if [ -d /usr/local/share/ca-certificates/sentinel ]; then
     echo "[Entrypoint] Installing Sentinel Root CA..."
