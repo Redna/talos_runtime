@@ -437,7 +437,7 @@ def run_daemon():
         HEALTH_FILE.write_text(json.dumps({"status": "running", "phase": "restarting", "consecutive_failures": compose_failures, "ts": time.time()}))
         time.sleep(5)
 
-def start():
+def start(fresh=False):
     ensure_run_dir()
     if PID_FILE.exists():
         pid = int(PID_FILE.read_text())
@@ -446,6 +446,9 @@ def start():
             print(f"Watchdog already running (PID: {pid}).")
             return
         except: PID_FILE.unlink()
+
+    if fresh:
+        os.environ["FORCE_FRESH_CLONE"] = "1"
 
     log_f = open(LOG_FILE, "a", encoding="utf-8")
     proc = subprocess.Popen([sys.executable, "-u", __file__, "daemon"], stdout=log_f, stderr=subprocess.STDOUT, cwd=str(RUNTIME_DIR), start_new_session=True)
@@ -737,7 +740,8 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(prog="talosctl")
     subparsers = parser.add_subparsers(dest="command")
 
-    subparsers.add_parser("start")
+    start_parser = subparsers.add_parser("start")
+    start_parser.add_argument("--fresh", action="store_true", help="Force a fresh clone of the talos repo from seed")
     subparsers.add_parser("stop")
     subparsers.add_parser("logs")
     subparsers.add_parser("monitor")
@@ -759,7 +763,7 @@ if __name__ == "__main__":
         parser.print_help()
         sys.exit(1)
 
-    if args.command == "start": start()
+    if args.command == "start": start(args.fresh)
     elif args.command == "stop": stop()
     elif args.command == "logs": logs()
     elif args.command == "monitor": monitor()
