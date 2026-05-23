@@ -7,10 +7,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 RUN pip install mitmproxy requests
 
-WORKDIR /app
+WORKDIR /sentinel
 COPY mitm_audit.py .
 
 # Use mitmproxy's default port
 EXPOSE 8080 8081
 
-ENTRYPOINT ["mitmdump", "-s", "/app/mitm_audit.py", "--set", "block_global=false"]
+ENTRYPOINT ["mitmdump", "-s", "/sentinel/mitm_audit.py", "--set", "block_global=false"]

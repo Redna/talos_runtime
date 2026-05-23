@@ -13,6 +13,7 @@ services:
     volumes:
       - sentinel_ca:/root/.mitmproxy
       - talos_app:/app:ro
+      - ./sentinel/mitm_audit.py:/sentinel/mitm_audit.py:ro
     healthcheck:
       test: ["CMD", "python3", "-c", "import socket; s = socket.socket(); s.connect(('localhost', 8080))"]
       interval: 5s
@@ -26,6 +27,7 @@ services:
     container_name: talos_agent
     cap_add:
       - LINUX_IMMUTABLE
+      - SYS_ADMIN
     env_file: .env
     environment:
       - PYTHONUNBUFFERED=1
@@ -47,6 +49,8 @@ services:
       - https_proxy=http://sentinel:8080
       - all_proxy=http://sentinel:8080
       - NO_PROXY=gate,xray,localhost,127.0.0.1
+      - REQUESTS_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt
+      - SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
     volumes:
       - talos_app:/app
       - spine_observability:/spine
@@ -70,13 +74,14 @@ services:
     ports:
       - "4000:4000"
     volumes:
-      - talos_app:/agent_app:rw
+      - talos_app:/app:rw
+      - sentinel_ca:/usr/local/share/ca-certificates/sentinel:ro
       - ./llm_logs:/runtime_logs:rw
       - ./xray_data:/data:rw
     environment:
       - TOGETHERAI_API_KEY=${TOGETHERAI_API_KEY:-}
       - OLLAMA_HOST=${OLLAMA_HOST:-host.docker.internal:11434}
-      - MEMORY_DIR=/agent_app/memory
+      - MEMORY_DIR=/app/memory
       - RUNTIME_LOG_DIR=/runtime_logs
       - DATA_DIR=/data
       - DAILY_BUDGET_LIMIT=${DAILY_BUDGET_LIMIT:-5.00}
@@ -84,6 +89,8 @@ services:
       - http_proxy=http://sentinel:8080
       - https_proxy=http://sentinel:8080
       - NO_PROXY=localhost,127.0.0.1
+      - REQUESTS_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt
+      - SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
     healthcheck:
       test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:4000/healthz')"]
       interval: 10s
@@ -92,6 +99,9 @@ services:
       start_period: 10s
     networks:
       - talos_net
+    depends_on:
+      sentinel:
+        condition: service_healthy
 
   xray:
     build:
