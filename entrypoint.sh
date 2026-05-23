@@ -39,9 +39,9 @@ fi
 # Wait for and install Sentinel Root CA if available
 if [ -d /usr/local/share/ca-certificates/sentinel ]; then
     echo "[Entrypoint] Installing Sentinel Root CA..."
-    # mitmproxy creates mitmproxy-ca-cert.pem. We need it as .crt for update-ca-certificates
+    # Copy from the RO volume to the writable system certs dir
     if [ -f /usr/local/share/ca-certificates/sentinel/mitmproxy-ca-cert.pem ]; then
-        cp /usr/local/share/ca-certificates/sentinel/mitmproxy-ca-cert.pem /usr/local/share/ca-certificates/sentinel/mitmproxy.crt
+        cp /usr/local/share/ca-certificates/sentinel/mitmproxy-ca-cert.pem /usr/local/share/ca-certificates/sentinel-mitmproxy.crt
         update-ca-certificates
     fi
 fi

@@ -6,8 +6,7 @@ services:
     environment:
       - GATE_URL=http://gate:4000
     networks:
-      - talos_internal
-      - talos_external
+      - talos_net
     ports:
       - "8080:8080" # Proxy
       - "8081:8081" # Web UI (Optional)
@@ -25,12 +24,14 @@ services:
       context: ..
       dockerfile: talos_runtime/Dockerfile
     container_name: talos_agent
+    cap_add:
+      - LINUX_IMMUTABLE
     env_file: .env
     environment:
       - PYTHONUNBUFFERED=1
       - TALOS_REPO_DIR=/app
       - PUID=${PUID:-1000}
-      - PGID=${PUID:-1000}
+      - PGID=${PGID:-1000}
       - FORCE_FRESH_CLONE=${FORCE_FRESH_CLONE:-0}
       - UV_PROJECT_ENVIRONMENT=/venv
       - UV_CACHE_DIR=/tmp/.uv-cache
@@ -52,7 +53,7 @@ services:
       - sentinel_ca:/usr/local/share/ca-certificates/sentinel:ro
       - ./spine_config.json:/spine/spine_config.json:ro
     networks:
-      - talos_internal
+      - talos_net
     depends_on:
       sentinel:
         condition: service_healthy
@@ -90,8 +91,7 @@ services:
       retries: 20
       start_period: 10s
     networks:
-      - talos_internal
-      - talos_external
+      - talos_net
 
   xray:
     build:
@@ -113,12 +113,10 @@ services:
       gate:
         condition: service_healthy
     networks:
-      - talos_internal
+      - talos_net
 
 networks:
-  talos_internal:
-    internal: true
-  talos_external:
+  talos_net:
     driver: bridge
 
 volumes:
