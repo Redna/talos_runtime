@@ -437,6 +437,37 @@ async def chat_completions(request: Request, background_tasks: BackgroundTasks):
         f"[Gate] Forwarding to {backend_key}: model={body.get('model')} tool_choice={body.get('tool_choice')} tools={len(body.get('tools') or [])} msgs={len(body.get('messages') or [])}"
     )
 
+    # Health check for Ollama before forwarding to prevent 500->503->deadlock cascade
+    if backend_key == "ollama":
+        try:
+            async with httpx.AsyncClient(timeout=2.0) as client:
+                health_check = await client.get(f"http://{OLLAMA_HOST}/api/tags")
+                if health_check.status_code != 200:
+                    return Response(
+                        content=json.dumps({
+                            "error": {
+                                "message": "Ollama health check failed. The service is reachable but returned an error. It may be overloaded or the model may be unloading.",
+                                "type": "server_error",
+                                "code": "ollama_unhealthy"
+                            }
+                        }),
+                        status_code=503,
+                        media_type="application/json",
+                    )
+                # Optional: check if the specific model is loaded if we wanted to be more granular
+        except (httpx.ConnectError, httpx.TimeoutException) as e:
+            return Response(
+                content=json.dumps({
+                    "error": {
+                        "message": f"Ollama is unreachable. Service might be down or restarting. Details: {str(e)}",
+                        "type": "server_error",
+                        "code": "ollama_offline"
+                    }
+                }),
+                status_code=503,
+                media_type="application/json",
+            )
+
     if is_streaming:
 
         async def stream_proxy() -> AsyncGenerator[bytes, None]:

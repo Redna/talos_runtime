@@ -1,36 +1,57 @@
-services:
-  talos:
-    build:
-      context: ..
-      dockerfile: talos_runtime/Dockerfile
-    container_name: talos_agent
-    security_opt:
-      - seccomp:unconfined
-    env_file: .env
-    environment:
-      - PYTHONUNBUFFERED=1
-      - TALOS_REPO_DIR=/app
-      - PUID=${PUID:-1000}
-      - PGID=${PGID:-1000}
-      - UV_PROJECT_ENVIRONMENT=/venv
-      - UV_CACHE_DIR=/tmp/.uv-cache
-      - DEFAULT_MODEL=${DEFAULT_MODEL}
-      - TALOS_MODEL=${TALOS_MODEL}
-      - SPINE_SOCKET=/tmp/spine.sock
-      - GITHUB_TOKEN=${GITHUB_TOKEN:-}
-      - GITHUB_SSH_KEY=${GITHUB_SSH_KEY:-}
-      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN:-}
-      - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID:-0}
-      - TALOS_MODEL=${TALOS_MODEL:-}
-      - MEMORY_DIR=/memory
-    volumes:
-      - talos_app:/app
-      - ./memory:/memory
-      - spine_observability:/spine
-      - ./spine_config.json:/spine/spine_config.json:ro
+sentinel:
+  build:
+    context: ./sentinel
+  container_name: talos_sentinel
+  environment:
+    - GATE_URL=http://gate:4000
+  networks:
+    - talos_internal
+    - talos_external
+  ports:
+    - "8080:8080" # Proxy
+    - "8081:8081" # Web UI (Optional)
+  volumes:
+    - sentinel_ca:/root/.mitmproxy
+    - talos_app:/app:ro
+talos:
+  build:
+    context: ..
+    dockerfile: talos_runtime/Dockerfile
+  container_name: talos_agent
+  env_file: .env
+
+  environment:
+    - PYTHONUNBUFFERED=1
+    - TALOS_REPO_DIR=/app
+    - PUID=${PUID:-1000}
+    - PGID=${PGID:-1000}
+    - FORCE_FRESH_CLONE=${FORCE_FRESH_CLONE:-0}
+    - UV_PROJECT_ENVIRONMENT=/venv
+    - UV_CACHE_DIR=/tmp/.uv-cache
+    - DEFAULT_MODEL=${DEFAULT_MODEL}
+    - TALOS_MODEL=${TALOS_MODEL}
+    - SPINE_SOCKET=/tmp/spine.sock
+    - GITHUB_TOKEN=${GITHUB_TOKEN:-}
+    - GITHUB_SSH_KEY=${GITHUB_SSH_KEY:-}
+    - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN:-}
+    - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID:-0}
+    - TALOS_MODEL=${TALOS_MODEL:-}
+    - MEMORY_DIR=/app/memory
+    - http_proxy=http://sentinel:8080
+    - https_proxy=http://sentinel:8080
+    - all_proxy=http://sentinel:8080
+    - NO_PROXY=gate,xray,localhost,127.0.0.1
+  volumes:
+    - talos_app:/app
+    - spine_observability:/spine
+    - sentinel_ca:/usr/local/share/ca-certificates/sentinel:ro
+    - ./spine_config.json:/spine/spine_config.json:ro
+
     networks:
-      - talos_net
+      - talos_internal
     depends_on:
+      sentinel:
+        condition: service_started
       gate:
         condition: service_healthy
 
@@ -44,17 +65,20 @@ services:
     ports:
       - "4000:4000"
     volumes:
-      - ./memory:/memory:rw
+      - talos_app:/app:rw
       - ./llm_logs:/runtime_logs:rw
       - ./xray_data:/data:rw
     environment:
       - TOGETHERAI_API_KEY=${TOGETHERAI_API_KEY:-}
       - OLLAMA_HOST=${OLLAMA_HOST:-host.docker.internal:11434}
-      - MEMORY_DIR=/memory
+      - MEMORY_DIR=/app/memory
       - RUNTIME_LOG_DIR=/runtime_logs
       - DATA_DIR=/data
       - DAILY_BUDGET_LIMIT=${DAILY_BUDGET_LIMIT:-5.00}
       - TALOS_CONTEXT_WINDOW=${TALOS_CONTEXT_WINDOW:-71680}
+      - http_proxy=http://sentinel:8080
+      - https_proxy=http://sentinel:8080
+      - NO_PROXY=localhost,127.0.0.1
     healthcheck:
       test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:4000/healthz')"]
       interval: 10s
@@ -62,7 +86,8 @@ services:
       retries: 20
       start_period: 10s
     networks:
-      - talos_net
+      - talos_internal
+      - talos_external # Needs external to talk to TogetherAI (or use proxy)
 
   xray:
     build:
@@ -84,12 +109,15 @@ services:
       gate:
         condition: service_healthy
     networks:
-      - talos_net
+      - talos_internal
 
 networks:
-  talos_net:
+  talos_internal:
+    internal: true
+  talos_external:
     driver: bridge
 
 volumes:
   spine_observability:
   talos_app:
+  sentinel_ca:

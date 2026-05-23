@@ -1,8 +1,7 @@
 #!/bin/bash
 GIT_REMOTE=${GIT_REMOTE:-origin}
-GIT_BRANCH=${GIT_BRANCH:-feat/talos}
-echo "[Post-commit] Pushing to $GIT_REMOTE/$GIT_BRANCH..."
-git push "$GIT_REMOTE" "$GIT_BRANCH" 2>&1 || {
+echo "[Post-commit] Pushing to $GIT_REMOTE HEAD..."
+git push -u "$GIT_REMOTE" HEAD 2>&1 || {
     echo "[Post-commit] WARNING: Push failed. Agent will be notified."
     exit 0
 }

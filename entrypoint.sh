@@ -18,62 +18,46 @@ if ! getent passwd "$USER_ID" > /dev/null 2>&1; then useradd -u "$USER_ID" -g "$
 
 USER_NAME=$(getent passwd "$USER_ID" | cut -d: -f1)
 
-if [ -d /app/.git ]; then
-    echo "[Entrypoint] Existing repo found, updating seed reference..."
-    cd /app
-    git fetch origin "$GIT_BRANCH"
+# Grant sudo permissions to the user and preserve proxy env vars
+echo "$USER_NAME ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/talos
+echo "Defaults env_keep += \"http_proxy https_proxy all_proxy no_proxy\"" >> /etc/sudoers.d/talos
+chmod 0440 /etc/sudoers.d/talos
 
-    # Save uncommitted work before any branch switching
-    STASHED=0
-    if ! git diff --quiet || ! git diff --cached --quiet || [ -n "$(git ls-files --others --exclude-standard)" ]; then
-        if git stash push -m "auto-saved on restart $(date -Iseconds 2>/dev/null || date +%Y-%m-%dT%H:%M:%S%z)"; then
-            STASHED=1
-            echo "[Entrypoint] Stashed uncommitted changes before restart"
-        fi
+# Wait for and install Sentinel Root CA if available
+if [ -d /usr/local/share/ca-certificates/sentinel ]; then
+    echo "[Entrypoint] Installing Sentinel Root CA..."
+    # mitmproxy creates mitmproxy-ca-cert.pem. We need it as .crt for update-ca-certificates
+    if [ -f /usr/local/share/ca-certificates/sentinel/mitmproxy-ca-cert.pem ]; then
+        cp /usr/local/share/ca-certificates/sentinel/mitmproxy-ca-cert.pem /usr/local/share/ca-certificates/sentinel/mitmproxy.crt
+        update-ca-certificates
     fi
-
-    # Update the local seed branch to match remote (spine fixes, etc.)
-    git checkout -f "$GIT_BRANCH" 2>/dev/null || true
-    git reset --hard "origin/$GIT_BRANCH" 2>/dev/null || true
-    git clean -fd
-else
-    echo "[Entrypoint] Fresh volume, cloning repo..."
-    rm -rf /app/.[!.]* /app/* 2>/dev/null
-    git clone -b "$GIT_BRANCH" "$GIT_REPO" /app
-    STASHED=0
 fi
 
-# Derive the volatile branch name from the seed (defaults to feat/talos)
-VOLATILE_BRANCH=${VOLATILE_BRANCH:-feat/talos}
-echo "[Entrypoint] Establishing local volatile branch: $VOLATILE_BRANCH"
-cd /app
+# Derive the volatile branch name from the seed (defaults to experiment)
+VOLATILE_BRANCH=${VOLATILE_BRANCH:-experiment}
 
-# On restart: preserve the working branch and its commit history.
-# Only create a fresh branch from seed if it doesn't exist yet.
-if git rev-parse --verify "$VOLATILE_BRANCH" > /dev/null 2>&1; then
-    echo "[Entrypoint] Restoring existing working branch: $VOLATILE_BRANCH"
-    git checkout "$VOLATILE_BRANCH"
+if [ -d /app/.git ] && [ "${FORCE_FRESH_CLONE:-0}" != "1" ]; then
+    echo "[Entrypoint] Existing repo found, preserving state..."
+    cd /app
 else
+    echo "[Entrypoint] Fresh volume or FORCE_FRESH_CLONE=1, (re)cloning repo..."
+    rm -rf /app/.[!.]* /app/* 2>/dev/null
+    git clone -b "$GIT_BRANCH" "$GIT_REPO" /app
+    cd /app
     echo "[Entrypoint] Creating new volatile branch: $VOLATILE_BRANCH from seed"
     git checkout -b "$VOLATILE_BRANCH"
 fi
 
 # Try to pull remote state for the volatile branch if available
-if git fetch origin "$VOLATILE_BRANCH" 2>/dev/null; then
-    if git merge-base --is-ancestor HEAD "origin/$VOLATILE_BRANCH" 2>/dev/null; then
-        echo "[Entrypoint] Fast-forwarding to remote $VOLATILE_BRANCH..."
-        git merge --ff-only "origin/$VOLATILE_BRANCH" 2>/dev/null || true
-    else
-        echo "[Entrypoint] Local $VOLATILE_BRANCH has diverged from remote — keeping local history"
-    fi
-fi
-
-# Restore saved uncommitted work onto the volatile branch
-if [ "$STASHED" = "1" ]; then
-    if git stash pop; then
-        echo "[Entrypoint] Recovered uncommitted files from a sudden crash. Commit them immediately."
-    else
-        echo "[Entrypoint] WARNING: stash pop had conflicts — uncommitted work left in stash"
+if git rev-parse --verify "$VOLATILE_BRANCH" > /dev/null 2>&1; then
+    echo "[Entrypoint] Working on branch: $VOLATILE_BRANCH"
+    if git fetch origin "$VOLATILE_BRANCH" 2>/dev/null; then
+        if git merge-base --is-ancestor HEAD "origin/$VOLATILE_BRANCH" 2>/dev/null; then
+            echo "[Entrypoint] Fast-forwarding to remote $VOLATILE_BRANCH..."
+            git merge --ff-only "origin/$VOLATILE_BRANCH" 2>/dev/null || true
+        else
+            echo "[Entrypoint] Local $VOLATILE_BRANCH has diverged from remote — keeping local history"
+        fi
     fi
 fi
 
@@ -84,6 +68,8 @@ echo "[Entrypoint] Commit: $COMMIT"
 echo "Restoring authoritative spine files..."
 cp -a /spine_backup/. /app/spine/
 chmod -x /app/spine/*.py
+echo "Locking down spine files (immutable bit)..."
+chattr -R +i /app/spine/ || echo "Warning: Could not set immutable bit (chattr not supported on this filesystem?)"
 echo "Purging stale __pycache__..."
 rm -rf /app/spine/__pycache__/
 echo "Running memory integrity audit..."
