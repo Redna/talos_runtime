@@ -80,6 +80,8 @@ services:
       - ./xray_data:/data:rw
     environment:
       - TOGETHERAI_API_KEY=${TOGETHERAI_API_KEY:-}
+      - NVIDIA_API_KEY=${NVIDIA_API_KEY:-}
+      - NVIDIA_AUDIT_MODEL=${NVIDIA_AUDIT_MODEL:-nvidia/google/gemma-4-31b-it}
       - OLLAMA_HOST=${OLLAMA_HOST:-host.docker.internal:11434}
       - MEMORY_DIR=/app/memory
       - RUNTIME_LOG_DIR=/runtime_logs

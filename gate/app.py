@@ -433,8 +433,11 @@ async def chat_completions(request: Request, background_tasks: BackgroundTasks):
         if resolved_model in THINKING_MODELS:
             body["reasoning_effort"] = "high"
 
+    # Filter out non-standard parameters for strict backends (NVIDIA, etc.)
+    forward_body = {k: v for k, v in body.items() if k not in ["turn"]}
+
     print(
-        f"[Gate] Forwarding to {backend_key}: model={body.get('model')} tool_choice={body.get('tool_choice')} tools={len(body.get('tools') or [])} msgs={len(body.get('messages') or [])}"
+        f"[Gate] Forwarding to {backend_key}: model={forward_body.get('model')} tool_choice={forward_body.get('tool_choice')} tools={len(forward_body.get('tools') or [])} msgs={len(forward_body.get('messages') or [])}"
     )
 
     # Health check for Ollama before forwarding to prevent 500->503->deadlock cascade
@@ -475,12 +478,12 @@ async def chat_completions(request: Request, background_tasks: BackgroundTasks):
             _accumulated_reasoning = ""
             _accumulated_tool_calls = []
             try:
-                for m in body.get("messages", []):
+                for m in forward_body.get("messages", []):
                     if m.get("content") is None:
                         m["content"] = ""
                 async with httpx.AsyncClient(timeout=1800.0) as client:
                     async with client.stream(
-                        "POST", url, json=body, headers=headers
+                        "POST", url, json=forward_body, headers=headers
                     ) as resp:
                         print(f"[Gate] Ollama response status: {resp.status_code}")
                         resp.raise_for_status()
@@ -562,12 +565,12 @@ async def chat_completions(request: Request, background_tasks: BackgroundTasks):
 
     else:
         try:
-            for m in body.get("messages", []):
+            for m in forward_body.get("messages", []):
                 if m.get("content") is None:
                     m["content"] = ""
             async with httpx.AsyncClient(timeout=1800.0) as client:
                 print(f"[Gate] NON-STREAM POSTing to {url}")
-                resp = await client.post(url, json=body, headers=headers)
+                resp = await client.post(url, json=forward_body, headers=headers)
                 print(
                     f"[Gate] NON-STREAM Ollama response: {resp.status_code} body: {resp.text[:200]}"
                 )
