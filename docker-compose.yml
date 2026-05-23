@@ -69,13 +69,13 @@ services:
     ports:
       - "4000:4000"
     volumes:
-      - talos_app:/app:rw
+      - talos_app:/agent_app:rw
       - ./llm_logs:/runtime_logs:rw
       - ./xray_data:/data:rw
     environment:
       - TOGETHERAI_API_KEY=${TOGETHERAI_API_KEY:-}
       - OLLAMA_HOST=${OLLAMA_HOST:-host.docker.internal:11434}
-      - MEMORY_DIR=/app/memory
+      - MEMORY_DIR=/agent_app/memory
       - RUNTIME_LOG_DIR=/runtime_logs
       - DATA_DIR=/data
       - DAILY_BUDGET_LIMIT=${DAILY_BUDGET_LIMIT:-5.00}
