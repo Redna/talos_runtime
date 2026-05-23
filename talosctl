@@ -332,12 +332,14 @@ def ollama_has_model(model_name):
         return model_name in result.stdout
     except (FileNotFoundError, subprocess.TimeoutExpired):
         return False
-
-def run_daemon():
+def run_daemon(fresh=False):
+    ensure_run_dir()
     signal.signal(signal.SIGINT, cleanup)
     signal.signal(signal.SIGTERM, cleanup)
     compose_args = get_compose_args(cached=True)
     compose_failures = 0
+    recreate = "--force-recreate" if fresh else ""
+
 
     for d in [MEMORY_DIR, RUNTIME_DIR / "models"]:
         if not d.exists():
@@ -363,7 +365,7 @@ def run_daemon():
         print("[DAEMON] No .gguf model configured, skipping llamacpp.", flush=True)
 
     print("[DAEMON] Starting Sentinel...", flush=True)
-    res = subprocess.run(f"docker compose {compose_args} up -d sentinel", shell=True, cwd=RUNTIME_DIR, capture_output=True, text=True)
+    res = subprocess.run(f"docker compose {compose_args} up -d {recreate} sentinel", shell=True, cwd=RUNTIME_DIR, capture_output=True, text=True)
     if res.returncode != 0:
         print(f"\033[91m[DAEMON] FATAL: docker compose up sentinel failed:\033[0m", flush=True)
         print(res.stderr.strip(), flush=True)
@@ -372,7 +374,7 @@ def run_daemon():
         sys.exit(1)
 
     print("[DAEMON] Starting Gate...", flush=True)
-    res = subprocess.run(f"docker compose {compose_args} up -d gate", shell=True, cwd=RUNTIME_DIR, capture_output=True, text=True)
+    res = subprocess.run(f"docker compose {compose_args} up -d {recreate} gate", shell=True, cwd=RUNTIME_DIR, capture_output=True, text=True)
     if res.returncode != 0:
         print(f"\033[91m[DAEMON] FATAL: docker compose up gate failed:\033[0m", flush=True)
         print(res.stderr.strip(), flush=True)
@@ -381,7 +383,7 @@ def run_daemon():
         sys.exit(1)
 
     print("[DAEMON] Starting X-ray...", flush=True)
-    res = subprocess.run(f"docker compose {compose_args} up -d xray", shell=True, cwd=RUNTIME_DIR, capture_output=True, text=True)
+    res = subprocess.run(f"docker compose {compose_args} up -d {recreate} xray", shell=True, cwd=RUNTIME_DIR, capture_output=True, text=True)
     if res.returncode != 0:
         print(f"[DAEMON] WARNING: X-ray startup failed: {res.stderr.strip()}", flush=True)
 
@@ -412,7 +414,7 @@ def run_daemon():
         print(f"\n[DAEMON] Starting Talos Agent...", flush=True)
         HEALTH_FILE.write_text(json.dumps({"status": "running", "phase": "agent_running", "ts": time.time()}))
 
-        cmd = f"docker compose {compose_args} up --build talos"
+        cmd = f"docker compose {compose_args} up --build {recreate} talos"
         process = subprocess.Popen(cmd, shell=True, cwd=RUNTIME_DIR)
         global daemon_process
         daemon_process = process
@@ -467,7 +469,11 @@ def start(fresh=False):
         os.environ["FORCE_FRESH_CLONE"] = "1"
 
     log_f = open(LOG_FILE, "a", encoding="utf-8")
-    proc = subprocess.Popen([sys.executable, "-u", __file__, "daemon"], stdout=log_f, stderr=subprocess.STDOUT, cwd=str(RUNTIME_DIR), start_new_session=True)
+    daemon_args = [sys.executable, "-u", __file__, "daemon"]
+    if fresh:
+        daemon_args.append("--fresh")
+    
+    proc = subprocess.Popen(daemon_args, stdout=log_f, stderr=subprocess.STDOUT, cwd=str(RUNTIME_DIR), start_new_session=True)
     PID_FILE.write_text(str(proc.pid))
 
     for _ in range(30):
@@ -762,7 +768,8 @@ if __name__ == "__main__":
     subparsers.add_parser("logs")
     subparsers.add_parser("monitor")
     subparsers.add_parser("status")
-    subparsers.add_parser("daemon")
+    daemon_parser = subparsers.add_parser("daemon")
+    daemon_parser.add_argument("--fresh", action="store_true")
     subparsers.add_parser("pause")
     subparsers.add_parser("resume")
     subparsers.add_parser("step")
@@ -784,7 +791,7 @@ if __name__ == "__main__":
     elif args.command == "logs": logs()
     elif args.command == "monitor": monitor()
     elif args.command == "status": status()
-    elif args.command == "daemon": run_daemon()
+    elif args.command == "daemon": run_daemon(args.fresh)
     elif args.command == "pause": pause()
     elif args.command == "resume": resume()
     elif args.command == "step": step()
