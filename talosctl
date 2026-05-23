@@ -225,13 +225,20 @@ def get_compose_args(cached=False):
     _compose_args_cache = result
     return result
 
-def wait_for_gate_healthy(timeout=120):
-    """Wait for the Gate container to become healthy via Docker health check."""
+def wait_for_infra_healthy(timeout=120):
+    """Wait for Gate and Sentinel containers to become healthy."""
     start = time.time()
     while time.time() - start < timeout:
+        gate_ok = False
+        sentinel_ok = False
+        
         res = subprocess.run("docker inspect --format='{{.State.Health.Status}}' talos_gate", shell=True, capture_output=True, text=True)
-        status = res.stdout.strip() if res.stdout else ""
-        if status == "healthy":
+        if res.stdout.strip() == "healthy": gate_ok = True
+        
+        res = subprocess.run("docker inspect --format='{{.State.Health.Status}}' talos_sentinel", shell=True, capture_output=True, text=True)
+        if res.stdout.strip() == "healthy": sentinel_ok = True
+        
+        if gate_ok and sentinel_ok:
             return True
         time.sleep(3)
     return False
@@ -355,6 +362,15 @@ def run_daemon():
     else:
         print("[DAEMON] No .gguf model configured, skipping llamacpp.", flush=True)
 
+    print("[DAEMON] Starting Sentinel...", flush=True)
+    res = subprocess.run(f"docker compose {compose_args} up -d sentinel", shell=True, cwd=RUNTIME_DIR, capture_output=True, text=True)
+    if res.returncode != 0:
+        print(f"\033[91m[DAEMON] FATAL: docker compose up sentinel failed:\033[0m", flush=True)
+        print(res.stderr.strip(), flush=True)
+        HEALTH_FILE.write_text(json.dumps({"status": "failed", "error": "sentinel startup failed", "ts": time.time()}))
+        if PID_FILE.exists(): PID_FILE.unlink()
+        sys.exit(1)
+
     print("[DAEMON] Starting Gate...", flush=True)
     res = subprocess.run(f"docker compose {compose_args} up -d gate", shell=True, cwd=RUNTIME_DIR, capture_output=True, text=True)
     if res.returncode != 0:
@@ -381,11 +397,11 @@ def run_daemon():
 
     healthy_retries = 0
     while True:
-        if not wait_for_gate_healthy():
+        if not wait_for_infra_healthy():
             healthy_retries += 1
             if healthy_retries >= MAX_INFRA_RETRIES:
-                print(f"\033[91m[DAEMON] FATAL: Gate unreachable after {MAX_INFRA_RETRIES} attempts.\033[0m", flush=True)
-                HEALTH_FILE.write_text(json.dumps({"status": "failed", "error": "gate unreachable", "ts": time.time()}))
+                print(f"\033[91m[DAEMON] FATAL: Infrastructure unreachable after {MAX_INFRA_RETRIES} attempts.\033[0m", flush=True)
+                HEALTH_FILE.write_text(json.dumps({"status": "failed", "error": "infra unreachable", "ts": time.time()}))
                 if PID_FILE.exists(): PID_FILE.unlink()
                 sys.exit(1)
             HEALTH_FILE.write_text(json.dumps({"status": "running", "phase": "waiting_infra", "retries": healthy_retries, "ts": time.time()}))
