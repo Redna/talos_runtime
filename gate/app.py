@@ -434,10 +434,14 @@ async def chat_completions(request: Request, background_tasks: BackgroundTasks):
             body["reasoning_effort"] = "high"
 
     # Filter out non-standard parameters for strict backends (NVIDIA, etc.)
-    forward_body = {k: v for k, v in body.items() if k not in ["turn"]}
+    # Also remove None values which some strict APIs reject
+    forward_body = {
+        k: v for k, v in body.items() 
+        if k not in ["turn"] and v is not None
+    }
 
     print(
-        f"[Gate] Forwarding to {backend_key}: model={forward_body.get('model')} tool_choice={forward_body.get('tool_choice')} tools={len(forward_body.get('tools') or [])} msgs={len(forward_body.get('messages') or [])}"
+        f"[Gate] Forwarding to {backend_key}: model={forward_body.get('model')} keys={list(forward_body.keys())}"
     )
 
     # Health check for Ollama before forwarding to prevent 500->503->deadlock cascade

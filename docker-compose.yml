@@ -38,7 +38,7 @@ services:
       - UV_PROJECT_ENVIRONMENT=/venv
       - UV_CACHE_DIR=/tmp/.uv-cache
       - DEFAULT_MODEL=${DEFAULT_MODEL}
-      - TALOS_MODEL=${TALOS_MODEL}
+      - TALOS_MODEL=${TALOS_CLOUD_MODEL:-nvidia/meta/llama-3.1-8b-instruct}
       - SPINE_SOCKET=/tmp/spine.sock
       - GITHUB_TOKEN=${GITHUB_TOKEN:-}
       - GITHUB_SSH_KEY=${GITHUB_SSH_KEY:-}
