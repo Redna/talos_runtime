@@ -13,4 +13,4 @@ COPY mitm_audit.py .
 # Use mitmproxy's default port
 EXPOSE 8080 8081
 
-ENTRYPOINT ["mitmdump", "-s", "mitm_audit.py", "--set", "block_global=false"]
+ENTRYPOINT ["mitmdump", "-s", "/app/mitm_audit.py", "--set", "block_global=false"]

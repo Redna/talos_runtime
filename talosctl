@@ -29,7 +29,7 @@ def _send_api_command(cmd):
 # --- Configuration ---
 RUNTIME_DIR = Path(__file__).parent.resolve()
 ROOT = RUNTIME_DIR.parent
-AGENT_DIR = ROOT / "talos"
+AGENT_DIR = RUNTIME_DIR / "talos"
 MEMORY_DIR = RUNTIME_DIR / "memory"
 RUN_DIR = Path("/tmp/talos-runtime")
 PID_FILE = RUN_DIR / "watchdog.pid"
