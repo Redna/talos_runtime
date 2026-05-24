@@ -54,25 +54,21 @@ VOLATILE_BRANCH=${VOLATILE_BRANCH:-experiment}
 if [ -d /app/.git ] && [ "${FORCE_FRESH_CLONE:-0}" != "1" ]; then
     echo "[Entrypoint] Existing repo found, preserving state..."
     cd /app
+    # Ensure the user has the latest remote state for the experiment branch
+    sudo -u "$USER_NAME" -H git fetch origin "$VOLATILE_BRANCH" 2>/dev/null || true
 else
     echo "[Entrypoint] Fresh volume or FORCE_FRESH_CLONE=1, (re)cloning repo..."
     rm -rf /app/.[!.]* /app/* 2>/dev/null
     git clone -b "$GIT_BRANCH" "$GIT_REPO" /app
     cd /app
     echo "[Entrypoint] Creating new volatile branch: $VOLATILE_BRANCH from seed"
+    # Create the branch and set up upstream tracking immediately
     git checkout -b "$VOLATILE_BRANCH"
-fi
-
-# Try to pull remote state for the volatile branch if available
-if git rev-parse --verify "$VOLATILE_BRANCH" > /dev/null 2>&1; then
-    echo "[Entrypoint] Working on branch: $VOLATILE_BRANCH"
-    if git fetch origin "$VOLATILE_BRANCH" 2>/dev/null; then
-        if git merge-base --is-ancestor HEAD "origin/$VOLATILE_BRANCH" 2>/dev/null; then
-            echo "[Entrypoint] Fast-forwarding to remote $VOLATILE_BRANCH..."
-            git merge --ff-only "origin/$VOLATILE_BRANCH" 2>/dev/null || true
-        else
-            echo "[Entrypoint] Local $VOLATILE_BRANCH has diverged from remote — keeping local history"
-        fi
+    git fetch origin "$VOLATILE_BRANCH" 2>/dev/null || true
+    if git rev-parse --verify "origin/$VOLATILE_BRANCH" > /dev/null 2>&1; then
+        echo "[Entrypoint] Remote $VOLATILE_BRANCH found, syncing..."
+        git reset --hard "origin/$VOLATILE_BRANCH"
+        git branch --set-upstream-to="origin/$VOLATILE_BRANCH" "$VOLATILE_BRANCH"
     fi
 fi
 

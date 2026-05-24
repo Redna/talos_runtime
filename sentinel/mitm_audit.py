@@ -153,6 +153,14 @@ def request(flow: http.HTTPFlow) -> None:
     # Standard Git push interception
     if "git-receive-pack" in path and method == "POST":
         logger.info(f"Git push detected to {flow.request.pretty_host}")
+        
+        # Hard block pushes to talos_seed
+        body = flow.request.get_text() or ""
+        if "refs/heads/talos_seed" in body:
+            logger.warning("BLOCKING PUSH: Attempted push to talos_seed branch!")
+            flow.response = http.Response.make(403, b"SENTINEL REJECTED: Pushing to 'talos_seed' is FORBIDDEN. Use the 'experiment' branch.", {"Content-Type": "text/plain"})
+            return
+
         diff = get_latest_commit_diff()
         if diff:
             audit_res = run_constitutional_audit(diff)
