@@ -7,6 +7,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 RUN pip install mitmproxy requests
 
+RUN git config --global --add safe.directory /app
+
 WORKDIR /sentinel
 COPY mitm_audit.py .
 
