@@ -1,6 +1,9 @@
 #!/bin/bash
 
-export HOME=/root
+# Ensure the home directory exists and is owned by the correct user
+mkdir -p "/home/$USER_NAME"
+chown -R "$USER_ID:$GROUP_ID" "/home/$USER_NAME"
+export HOME="/home/$USER_NAME"
 
 GIT_REPO=https://x-access-token:${GITHUB_TOKEN}@github.com/Redna/talos.git
 GIT_BRANCH=talos_seed
