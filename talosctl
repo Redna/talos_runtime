@@ -346,6 +346,11 @@ def run_daemon(fresh=False):
             d.mkdir(parents=True, exist_ok=True)
 
     env = load_env(RUNTIME_DIR / ".env")
+    # Protect against host environment pollution
+    for key in ["TALOS_MODEL", "TALOS_CLOUD_MODEL", "DEFAULT_MODEL"]:
+        if key in os.environ:
+            del os.environ[key]
+
     model = env.get("DEFAULT_MODEL", "")
     needs_llamacpp = model.endswith(".gguf")
 
@@ -520,6 +525,11 @@ def _draw_dashboard():
 
     compose_args = get_compose_args(cached=True)
     env = load_env(RUNTIME_DIR / ".env")
+    # Clean up environment to ensure .env file values take precedence over host shell
+    for key in ["TALOS_MODEL", "TALOS_CLOUD_MODEL", "DEFAULT_MODEL"]:
+        if key in os.environ:
+            del os.environ[key]
+    
     model = env.get("DEFAULT_MODEL", "unknown")
 
     now = time.strftime("%H:%M:%S")

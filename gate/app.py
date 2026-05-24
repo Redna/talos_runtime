@@ -447,7 +447,7 @@ async def chat_completions(request: Request, background_tasks: BackgroundTasks):
     # Health check for Ollama before forwarding to prevent 500->503->deadlock cascade
     if backend_key == "ollama":
         try:
-            async with httpx.AsyncClient(timeout=2.0) as client:
+            async with httpx.AsyncClient(timeout=10.0) as client:
                 health_check = await client.get(f"http://{OLLAMA_HOST}/api/tags")
                 if health_check.status_code != 200:
                     return Response(

@@ -115,6 +115,7 @@ If it is fully compliant, call 'approve_commit'.
             resp = requests.post(
                 f"{GATE_URL}/v1/chat/completions", 
                 json={
+                    "model": os.getenv("AUDIT_MODEL", "gemma4:31b-cloud"),
                     "messages": [{"role": "user", "content": audit_prompt}],
                     "tools": AUDIT_TOOLS,
                     "tool_choice": "auto",
@@ -146,9 +147,22 @@ If it is fully compliant, call 'approve_commit'.
             
     return {"rejected": False}
 
+# Traffic Sniffer Log
+TRAFFIC_LOG = "/sentinel/traffic.log"
+
+def log_traffic(message: str):
+    try:
+        with open(TRAFFIC_LOG, "a") as f:
+            f.write(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] {message}\n")
+    except: pass
+
 def request(flow: http.HTTPFlow) -> None:
     path = flow.request.path.lower()
     method = flow.request.method
+    host = flow.request.pretty_host
+    
+    # Traffic Sniffing
+    log_traffic(f"REQ: {method} {flow.request.url}")
     
     # Standard Git push interception
     if "git-receive-pack" in path and method == "POST":
@@ -183,3 +197,6 @@ def request(flow: http.HTTPFlow) -> None:
                     flow.response = http.Response.make(403, b"SENTINEL REJECTED: Secret Detected", {"Content-Type": "text/plain"})
                     return
         except: pass
+
+def response(flow: http.HTTPFlow) -> None:
+    log_traffic(f"RES: {flow.response.status_code} {flow.request.url} ({len(flow.response.content)} bytes)")

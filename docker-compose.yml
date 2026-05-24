@@ -5,8 +5,10 @@ services:
     container_name: talos_sentinel
     environment:
       - GATE_URL=http://gate:4000
+      - AUDIT_MODEL=${TALOS_CLOUD_MODEL:-gemma4:31b-cloud}
     networks:
-      - talos_net
+      - talos_internal
+      - talos_external
     ports:
       - "8080:8080" # Proxy
       - "8081:8081" # Web UI (Optional)
@@ -48,7 +50,7 @@ services:
       - http_proxy=http://sentinel:8080
       - https_proxy=http://sentinel:8080
       - all_proxy=http://sentinel:8080
-      - NO_PROXY=gate,talos_gate,xray,talos_xray,localhost,127.0.0.1
+      - NO_PROXY=gate,talos_gate,xray,talos_xray,sentinel,talos_sentinel,localhost,127.0.0.1,host.docker.internal,172.16.0.0/12,192.168.0.0/16,10.0.0.0/8,217.160.76.254,api.telegram.org
       - REQUESTS_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt
       - SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
     volumes:
@@ -57,7 +59,7 @@ services:
       - sentinel_ca:/usr/local/share/ca-certificates/sentinel:ro
       - ./spine_config.json:/spine/spine_config.json:ro
     networks:
-      - talos_net
+      - talos_internal
     depends_on:
       sentinel:
         condition: service_healthy
@@ -82,7 +84,7 @@ services:
       - TOGETHERAI_API_KEY=${TOGETHERAI_API_KEY:-}
       - NVIDIA_API_KEY=${NVIDIA_API_KEY:-}
       - NVIDIA_AUDIT_MODEL=${NVIDIA_AUDIT_MODEL:-nvidia/google/gemma-4-31b-it}
-      - OLLAMA_HOST=${OLLAMA_HOST:-host.docker.internal:11434}
+      - OLLAMA_HOST=${OLLAMA_HOST:-host.docker.internal:11435}
       - MEMORY_DIR=/app/memory
       - RUNTIME_LOG_DIR=/runtime_logs
       - DATA_DIR=/data
@@ -90,7 +92,8 @@ services:
       - TALOS_CONTEXT_WINDOW=${TALOS_CONTEXT_WINDOW:-71680}
       - http_proxy=http://sentinel:8080
       - https_proxy=http://sentinel:8080
-      - NO_PROXY=localhost,127.0.0.1
+      - all_proxy=http://sentinel:8080
+      - NO_PROXY=gate,talos_gate,xray,talos_xray,sentinel,talos_sentinel,localhost,127.0.0.1,host.docker.internal,172.16.0.0/12,192.168.0.0/16,10.0.0.0/8,217.160.76.254,api.telegram.org
       - REQUESTS_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt
       - SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
     healthcheck:
@@ -100,7 +103,8 @@ services:
       retries: 20
       start_period: 10s
     networks:
-      - talos_net
+      - talos_internal
+      - talos_external
     depends_on:
       sentinel:
         condition: service_healthy
@@ -115,7 +119,7 @@ services:
     environment:
       - GATE_URL=http://gate:4000
       - SPINE_DIR=/spine
-      - OLLAMA_HOST=${OLLAMA_HOST:-host.docker.internal:11434}
+      - OLLAMA_HOST=${OLLAMA_HOST:-host.docker.internal:11435}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:
@@ -125,10 +129,20 @@ services:
       gate:
         condition: service_healthy
     networks:
-      - talos_net
+      - talos_internal
+      - talos_external
+
+  ollama_proxy:
+    image: alpine/socat
+    container_name: talos_ollama_proxy
+    network_mode: host
+    command: TCP-LISTEN:11435,fork,reuseaddr TCP:127.0.0.1:11434
+    restart: always
 
 networks:
-  talos_net:
+  talos_internal:
+    internal: true
+  talos_external:
     driver: bridge
 
 volumes:
