@@ -48,7 +48,7 @@ services:
       - http_proxy=http://sentinel:8080
       - https_proxy=http://sentinel:8080
       - all_proxy=http://sentinel:8080
-      - NO_PROXY=gate,talos_gate,xray,talos_xray,sentinel,talos_sentinel,localhost,127.0.0.1
+      - NO_PROXY=gate,talos_gate,xray,talos_xray,localhost,127.0.0.1
       - REQUESTS_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt
       - SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
     volumes:

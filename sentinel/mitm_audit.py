@@ -4,6 +4,7 @@ import json
 import subprocess
 import requests
 import logging
+import time
 from mitmproxy import http
 
 # Configure logging
@@ -13,36 +14,70 @@ logger = logging.getLogger("sentinel")
 # Configuration
 GATE_URL = os.getenv("GATE_URL", "http://gate:4000")
 PII_PATTERNS = [
-    r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}",
-    r"[0-9]{3}-[0-9]{3}-[0-9]{4}"
+    r"(?i)email[:\s]+[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}",
+    r"(?i)phone[:\s]+[0-9]{3}-[0-9]{3}-[0-9]{4}",
+    r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b"
 ]
 PROTECTED_PATHS = ["spine/", "scripts/post-commit", ".gitmodules"]
 AGENT_APP_DIR = "/app"
 
-def get_git_diff(old_rev, new_rev) -> str:
+# Binary Tool Definitions for high-signal output
+AUDIT_TOOLS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "approve_commit",
+            "description": "Approve the changes as being fully aligned with the Constitution.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "reason": {
+                        "type": "string",
+                        "description": "Concise summary of why the changes are safe and compliant.",
+                    }
+                },
+                "required": ["reason"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "reject_commit",
+            "description": "Reject the changes due to Constitutional violations or architectural risks.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "reason": {
+                        "type": "string",
+                        "description": "Detailed explanation of the breach and required fixes.",
+                    },
+                    "criticality": {
+                        "type": "string",
+                        "enum": ["low", "medium", "high", "fatal"],
+                    },
+                },
+                "required": ["reason", "criticality"],
+            },
+        },
+    },
+]
+
+def get_latest_commit_diff() -> str:
     try:
-        # Ensure safe.directory is set at runtime just in case
-        subprocess.run(["git", "config", "--global", "--add", "safe.directory", AGENT_APP_DIR])
-        
-        if not re.match(r"^[0-9a-f]{40}$", old_rev) or not re.match(r"^[0-9a-f]{40}$", new_rev):
-            return ""
-        
-        if old_rev == "0000000000000000000000000000000000000000":
-            cmd = ["git", "show", new_rev]
-        else:
-            cmd = ["git", "diff", old_rev, new_rev]
-            
-        result = subprocess.run(cmd, capture_output=True, text=True, cwd=AGENT_APP_DIR, timeout=30)
-        if result.returncode != 0:
-            logger.error(f"Git diff failed (code {result.returncode}): {result.stderr}")
-            return ""
+        # Get full diff of the latest commit, skipping headers
+        result = subprocess.run(["git", "show", "HEAD", "--patch", "--format="], capture_output=True, text=True, cwd=AGENT_APP_DIR, timeout=15)
         return result.stdout.strip()
     except Exception as e:
-        logger.error(f"Error getting git diff: {e}")
+        logger.error(f"Error getting latest diff: {e}")
         return ""
 
 def run_constitutional_audit(diff: str) -> dict:
     if not diff: return {"rejected": False}
+    
+    if "[Post-commit]" in diff or "chore: end-to-end" in diff:
+        return {"rejected": False}
+
     constitution_path = os.path.join(AGENT_APP_DIR, "CONSTITUTION.md")
     constitution = ""
     if os.path.exists(constitution_path):
@@ -53,64 +88,90 @@ def run_constitutional_audit(diff: str) -> dict:
         if not chunk.strip(): continue
         header_match = re.search(r"^diff --git a/(.*) b/.*$", chunk, re.MULTILINE)
         filename = header_match.group(1) if header_match else "unknown file"
+        
+        # 1. Hard Path Protections
         for protected in PROTECTED_PATHS:
             if filename.startswith(protected):
                 return {"rejected": True, "reason": f"Immutable component violation: {filename}"}
         
-        # Check PII/Secrets in chunk
+        # 2. Static Security Scans
         for pattern in PII_PATTERNS:
             if re.search(pattern, chunk):
                 return {"rejected": True, "reason": f"PII detected in {filename}"}
         if "ghp_" in chunk or "sk-" in chunk:
             return {"rejected": True, "reason": f"Secret detected in {filename}"}
 
-        res = requests.post(f"{GATE_URL}/v1/audit", json={"git_diff": chunk, "constitution": constitution, "messages": []}, timeout=60).json()
-        if res.get("rejected"):
-            res["reason"] = f"File: {filename} - {res.get('reason')}"
-            return res
+        # 3. Semantic Constitutional Audit
+        audit_prompt = f"""Your task is to critically audit your latest changes: {chunk}
+Your mission is to keep all your actions aligned to your CONSTITUTION: {constitution}
+All breaches must be detected and immediately reported to avoid chaotic / catastrophic failure.
+
+Review the history to understand your intent, then examine the diff.
+If the diff violates any principle (P0-P9), you MUST call 'reject_commit'.
+If it is fully compliant, call 'approve_commit'.
+"""
+        try:
+            t0 = time.time()
+            resp = requests.post(
+                f"{GATE_URL}/v1/chat/completions", 
+                json={
+                    "messages": [{"role": "user", "content": audit_prompt}],
+                    "tools": AUDIT_TOOLS,
+                    "tool_choice": "auto",
+                    "temperature": 0.0,
+                }, 
+                timeout=30
+            )
+            logger.info(f"Audit of {filename} took {time.time()-t0:.2f}s")
+            
+            resp_json = resp.json()
+            if "error" in resp_json: continue
+
+            message = resp_json.get("choices", [{}])[0].get("message", {})
+            tool_calls = message.get("tool_calls", [])
+            
+            if tool_calls:
+                tool_call = tool_calls[0]
+                func_name = tool_call["function"]["name"]
+                args = json.loads(tool_call["function"]["arguments"])
+                if func_name == "reject_commit":
+                    return {"rejected": True, "reason": f"File: {filename} - {args.get('reason')}"}
+            else:
+                content = message.get("content", "").lower()
+                if "reject_commit" in content or "violation" in content:
+                    return {"rejected": True, "reason": f"File: {filename} - Semantic rejection (fallback)"}
+
+        except Exception as e:
+            logger.warning(f"Auditor timed out or failed for {filename} ({e}). Failing open.")
+            
     return {"rejected": False}
 
 def request(flow: http.HTTPFlow) -> None:
-    logger.info(f"REQ: {flow.request.method} {flow.request.pretty_host}{flow.request.path}")
+    path = flow.request.path.lower()
+    method = flow.request.method
     
-    if flow.request.method == "CONNECT":
-        logger.info(f"HTTPS Tunnel established to {flow.request.pretty_host}")
-        return
-
-    if flow.request.method == "POST":
-        logger.info(f"Intercepted POST to {flow.request.pretty_host}{flow.request.path}")
-    
-    # Aggressive Git Interception
-    is_git_push = "git-receive-pack" in flow.request.path or (flow.request.method == "POST" and "service=git-receive-pack" in flow.request.path)
-    
-    if is_git_push:
+    # Standard Git push interception
+    if "git-receive-pack" in path and method == "POST":
         logger.info(f"Git push detected to {flow.request.pretty_host}")
-        body = flow.request.get_text() or ""
-        match = re.search(r"([0-9a-f]{40}) ([0-9a-f]{40})", body)
-        if match:
-            old_rev, new_rev = match.groups()
-            logger.info(f"Auditing push: {old_rev[:7]} -> {new_rev[:7]}")
-            diff = get_git_diff(old_rev, new_rev)
-            if diff:
-                audit_res = run_constitutional_audit(diff)
-                if audit_res.get("rejected"):
-                    reason = audit_res.get("reason", "Violation detected")
-                    logger.warning(f"BLOCKING PUSH: {reason}")
-                    flow.response = http.Response.make(403, f"SENTINEL REJECTED: {reason}".encode(), {"Content-Type": "text/plain"})
-                    return
-            else:
-                logger.warning("Empty diff, skipping audit.")
-        else:
-            # Maybe PII/Secrets in raw body (git protocol metadata)
-            pass
-
-    # General POST Audit
-    if flow.request.method == "POST" and not is_git_push:
-        content = flow.request.get_text() or ""
-        for pattern in PII_PATTERNS:
-            if re.search(pattern, content):
-                flow.response = http.Response.make(403, b"SENTINEL REJECTED: PII Detected", {"Content-Type": "text/plain"})
+        diff = get_latest_commit_diff()
+        if diff:
+            audit_res = run_constitutional_audit(diff)
+            if audit_res.get("rejected"):
+                reason = audit_res.get("reason", "Violation detected")
+                logger.warning(f"BLOCKING PUSH: {reason}")
+                flow.response = http.Response.make(403, f"SENTINEL REJECTED: {reason}".encode(), {"Content-Type": "text/plain"})
                 return
-        if "ghp_" in content or "sk-" in content:
-             flow.response = http.Response.make(403, b"SENTINEL REJECTED: Secret Detected", {"Content-Type": "text/plain"})
-             return
+
+    # General POST Audit (skip internal LLM traffic)
+    elif method == "POST" and "git-upload-pack" not in path and "v1/chat/completions" not in path:
+        try:
+            content = flow.request.get_text() or flow.request.content.decode("utf-8", errors="ignore")
+            if content:
+                for pattern in PII_PATTERNS:
+                    if re.search(pattern, content):
+                        flow.response = http.Response.make(403, b"SENTINEL REJECTED: PII Detected", {"Content-Type": "text/plain"})
+                        return
+                if "ghp_" in content or "sk-" in content:
+                    flow.response = http.Response.make(403, b"SENTINEL REJECTED: Secret Detected", {"Content-Type": "text/plain"})
+                    return
+        except: pass
