@@ -1035,24 +1035,46 @@ If it is fully compliant, call 'approve_commit'.
         # Append the audit task as a new USER turn
         audit_messages = messages + [{"role": "user", "content": audit_prompt}]
 
-        # Call the LLM for audit — use ollama backend
-        backend_url = BACKENDS.get("ollama", BACKENDS["local"])
-        audit_model = list(MODEL_MAP.keys())[0] if MODEL_MAP else "talos"
+        # Call the LLM for audit
+        backend_key = "local"
+        if NVIDIA_API_KEY:
+            backend_key = "nvidia"
+        
+        backend_url = BACKENDS.get(backend_key, BACKENDS["local"])
+        audit_model = os.environ.get("NVIDIA_AUDIT_MODEL", "nvidia/google/gemma-4-31b-it")
+        if backend_key == "nvidia" and audit_model.startswith("nvidia/"):
+            audit_model = audit_model.replace("nvidia/", "", 1)
+
         payload = {
             "model": audit_model,
             "messages": audit_messages,
             "tools": audit_tools,
-            "tool_choice": "required",
+            "tool_choice": "auto",
             "temperature": 0.0,
         }
+        
+        headers = {"Content-Type": "application/json"}
+        if backend_key == "nvidia" and NVIDIA_API_KEY:
+            headers["Authorization"] = f"Bearer {NVIDIA_API_KEY}"
 
         try:
-            async with httpx.AsyncClient(timeout=30.0) as client:
-                resp = await client.post(backend_url, json=payload)
+            async with httpx.AsyncClient(timeout=60.0) as client:
+                resp = await client.post(backend_url, json=payload, headers=headers)
                 resp.raise_for_status()
 
                 resp_json = resp.json()
-                tool_call = resp_json["choices"][0]["message"]["tool_calls"][0]
+                tool_calls = resp_json["choices"][0]["message"].get("tool_calls", [])
+                if not tool_calls:
+                    # Fallback if model didn't call tool but provided text
+                    content = resp_json["choices"][0]["message"].get("content", "").lower()
+                    rejected = "reject_commit" in content
+                    return {
+                        "rejected": rejected,
+                        "reason": f"Heuristic: {content[:200]}",
+                        "criticality": "high" if rejected else "low"
+                    }
+                
+                tool_call = tool_calls[0]
                 func_name = tool_call["function"]["name"]
                 args = json.loads(tool_call["function"]["arguments"])
 
