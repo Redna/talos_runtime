@@ -91,6 +91,10 @@ echo "Running memory integrity audit..."
 python3 /app/scripts/startup_audit.py || true
 
 chown -R "$USER_NAME":"$GROUP_ID" /app
+# Ensure /home/talos exists and is owned by talos
+mkdir -p "/home/$USER_NAME"
+chown -R "$USER_NAME":"$GROUP_ID" "/home/$USER_NAME"
+
 # Ensure /memory exists and is writable by talos before chown
 mkdir -p /memory
 chmod -R 777 /memory
