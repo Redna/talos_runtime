@@ -6,5 +6,5 @@
   "app_dir": "/app",
   "socket_path": "/tmp/spine.sock",
   "context_threshold_pct": 0.85,
-  "gate_url": "http://talos_gate:4000/v1/chat/completions"
+  "gate_url": "http://gate:4000/v1/chat/completions"
 }

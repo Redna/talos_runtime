@@ -54,6 +54,7 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 
 # 4. Agent sandbox: install pip + make venv writable so Talos can add packages
 RUN uv pip install pip && \
+    uv pip install -r requirements.txt && \
     chmod -R 777 /venv
 
 # 4a. Preserve pristine spine files (restored on each startup to prevent cortex corruption)

@@ -425,10 +425,13 @@ def run_daemon(fresh=False):
             if exit_code is not None: break
 
             # Runtime Spine Integrity Watchdog
-            if not check_spine_integrity():
-                print("\033[91m[DAEMON] CRITICAL: Spine integrity violation detected! The agent has altered protected files.\033[0m", flush=True)
-                trigger_lazarus_reset(reason="Spine Tampering", mode="spine")
-                break
+            try:
+                if not check_spine_integrity():
+                    print("\033[91m[DAEMON] CRITICAL: Spine integrity violation detected! The agent has altered protected files.\033[0m", flush=True)
+                    trigger_lazarus_reset(reason="Spine Tampering", mode="spine")
+                    break
+            except:
+                pass # Container might not be ready yet
 
             if (time.time() - start_time) > UPTIME_STABILITY_THRESHOLD:
                 if not check_cognitive_heartbeat(start_time):
