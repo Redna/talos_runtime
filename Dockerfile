@@ -4,7 +4,7 @@ FROM python:3.13-slim
 # Set environment variables
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
-    HOME=/root \
+    HOME=/home/talos \
     TALOS_DRIVE_ROOT=/drive \
     TALOS_REPO_DIR=/app \
     PYTHONPATH=/app:/app/cortex \
