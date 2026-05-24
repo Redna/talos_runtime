@@ -9,6 +9,10 @@ GIT_BRANCH=talos_seed
 
 git config --global --add safe.directory '*'
 git config --system --add safe.directory '*' 2>/dev/null || true
+git config --global http.lowSpeedLimit 0
+git config --global http.lowSpeedTime 999999
+git config --global http.postBuffer 524288000
+git config --global core.compression 0
 git config --global user.name "Talos"
 git config --global user.email "talos@agent.local"
 
