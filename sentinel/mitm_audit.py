@@ -88,18 +88,32 @@ def run_constitutional_audit(diff: str) -> dict:
         if not chunk.strip(): continue
         header_match = re.search(r"^diff --git a/(.*) b/.*$", chunk, re.MULTILINE)
         filename = header_match.group(1) if header_match else "unknown file"
-        
+
         for protected in PROTECTED_PATHS:
             if filename.startswith(protected):
                 return {"rejected": True, "reason": f"Immutable component violation: {filename}"}
-        
+
         for pattern in PII_PATTERNS:
             if re.search(pattern, chunk):
                 return {"rejected": True, "reason": f"PII detected in {filename}"}
         if "ghp_" in chunk or "sk-" in chunk:
             return {"rejected": True, "reason": f"Secret detected in {filename}"}
 
-    # 2. Semantic Constitutional Audit
+    # 2. Syntactic Quality Pass (Syntax Gate)
+    py_files = re.findall(r"^diff --git a/(.*\.py) b/.*$", diff, re.MULTILINE)
+    for py_file in py_files:
+        try:
+            # Check the actual file on disk since it matches the proposed commit in the shared volume
+            file_path = os.path.join(AGENT_APP_DIR, py_file)
+            if os.path.exists(file_path):
+                res = subprocess.run(["python3", "-m", "py_compile", file_path], capture_output=True, text=True, timeout=5)
+                if res.returncode != 0:
+                    error_msg = res.stderr.strip().replace(file_path, py_file)
+                    return {"rejected": True, "reason": f"Syntax Gate Violation in {py_file}:\n{error_msg}"}
+        except Exception as e:
+            logger.warning(f"Syntax Gate error for {py_file}: {e}")
+
+    # 3. Semantic Constitutional Audit
     audit_prompt = f"""Your task is to critically audit your latest changes:
 {diff}
 

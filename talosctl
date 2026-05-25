@@ -116,22 +116,23 @@ def trigger_lazarus_reset(reason="Crash detected", mode="cortex"):
             return
 
     # --- VOLUME RECOVERY ---
-    print(f"[DAEMON] Reverting code in named volume 'talos_workspace'...")
+    print(f"[DAEMON] Reverting code in named volume 'talos_app'...")
 
     res = subprocess.run(
-        "docker run --rm -v talos_workspace:/app -w /app alpine/git rev-parse --short HEAD",
+        "docker run --rm -v talos_app:/app -w /app alpine/git rev-parse --short HEAD",
         shell=True, capture_output=True, text=True
     )
     last_commit = res.stdout.strip() if res.stdout else "unknown"
 
     subprocess.run(
-        f"docker run --rm -v talos_workspace:/app -w /app alpine/git reset --hard HEAD~{depth}",
+        f"docker run --rm -v talos_app:/app -w /app alpine/git reset --hard HEAD~{depth}",
         shell=True
     )
     subprocess.run(
-        "docker run --rm -v talos_workspace:/app -w /app alpine/git clean -fd",
+        "docker run --rm -v talos_app:/app -w /app alpine/git clean -fd",
         shell=True
     )
+
 
     # --- SYNC HOST FOR CONSISTENCY ---
     subprocess.run(f"git reset --hard HEAD~{depth}", shell=True, cwd=AGENT_DIR)
