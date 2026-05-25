@@ -106,7 +106,10 @@ def run_constitutional_audit(diff: str) -> dict:
             # Check the actual file on disk since it matches the proposed commit in the shared volume
             file_path = os.path.join(AGENT_APP_DIR, py_file)
             if os.path.exists(file_path):
-                res = subprocess.run(["python3", "-m", "py_compile", file_path], capture_output=True, text=True, timeout=5)
+                # Set environment to prevent writing __pycache__ on read-only mount
+                env = os.environ.copy()
+                env["PYTHONDONTWRITEBYTECODE"] = "1"
+                res = subprocess.run(["python3", "-m", "py_compile", file_path], capture_output=True, text=True, timeout=5, env=env)
                 if res.returncode != 0:
                     error_msg = res.stderr.strip().replace(file_path, py_file)
                     return {"rejected": True, "reason": f"Syntax Gate Violation in {py_file}:\n{error_msg}"}

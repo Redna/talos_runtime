@@ -41,7 +41,7 @@ STATS_FILE = MEMORY_DIR / ".runtime_stats.json"
 PENDING_NOTICES_PATH = MEMORY_DIR / "pending_system_notices.json"
 
 # Thresholds
-UPTIME_STABILITY_THRESHOLD = 60
+UPTIME_STABILITY_THRESHOLD = 300
 MAX_COGNITIVE_STALL_SECONDS = 600
 MAX_REVERSAL_DEPTH = 5
 
@@ -434,7 +434,7 @@ def run_daemon(fresh=False):
             # Runtime Spine Integrity Watchdog
             try:
                 if not check_spine_integrity():
-                    print("\033[91m[DAEMON] CRITICAL: Spine integrity violation detected! The agent has altered protected files.\033[0m", flush=True)
+                    print("\033[91m[DAEMON] CRITICAL: Spine integrity violation detected! Reverting...\033[0m", flush=True)
                     trigger_lazarus_reset(reason="Spine Tampering", mode="spine")
                     break
             except:
@@ -442,6 +442,7 @@ def run_daemon(fresh=False):
 
             if (time.time() - start_time) > UPTIME_STABILITY_THRESHOLD:
                 if not check_cognitive_heartbeat(start_time):
+                    print("\033[91m[DAEMON] CRITICAL: Cognitive Stall detected! Reverting...\033[0m", flush=True)
                     spine_restart("Cognitive Stall")
                     trigger_lazarus_reset("Cognitive Stall")
                     break
