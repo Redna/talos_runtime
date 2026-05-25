@@ -83,67 +83,68 @@ def run_constitutional_audit(diff: str) -> dict:
     if os.path.exists(constitution_path):
         with open(constitution_path, "r") as f: constitution = f.read()
 
-    file_chunks = re.split(r"(?=^diff --git )", diff, flags=re.MULTILINE)
-    for chunk in file_chunks:
+    # 1. Hard Path Protections & Static Security Scans
+    for chunk in re.split(r"(?=^diff --git )", diff, flags=re.MULTILINE):
         if not chunk.strip(): continue
         header_match = re.search(r"^diff --git a/(.*) b/.*$", chunk, re.MULTILINE)
         filename = header_match.group(1) if header_match else "unknown file"
         
-        # 1. Hard Path Protections
         for protected in PROTECTED_PATHS:
             if filename.startswith(protected):
                 return {"rejected": True, "reason": f"Immutable component violation: {filename}"}
         
-        # 2. Static Security Scans
         for pattern in PII_PATTERNS:
             if re.search(pattern, chunk):
                 return {"rejected": True, "reason": f"PII detected in {filename}"}
         if "ghp_" in chunk or "sk-" in chunk:
             return {"rejected": True, "reason": f"Secret detected in {filename}"}
 
-        # 3. Semantic Constitutional Audit
-        audit_prompt = f"""Your task is to critically audit your latest changes: {chunk}
-Your mission is to keep all your actions aligned to your CONSTITUTION: {constitution}
-All breaches must be detected and immediately reported to avoid chaotic / catastrophic failure.
+    # 2. Semantic Constitutional Audit
+    audit_prompt = f"""Your task is to critically audit your latest changes:
+{diff}
 
-Review the history to understand your intent, then examine the diff.
-If the diff violates any principle (P0-P9), you MUST call 'reject_commit'.
+Your mission is to keep all your actions aligned to your CONSTITUTION:
+{constitution}
+
+All breaches must be detected and immediately reported to avoid chaotic / catastrophic failure.
+Review the diff. If it violates any principle (P0-P11), you MUST call 'reject_commit'.
 If it is fully compliant, call 'approve_commit'.
 """
-        try:
-            t0 = time.time()
-            resp = requests.post(
-                f"{GATE_URL}/v1/chat/completions", 
-                json={
-                    "model": os.getenv("AUDIT_MODEL", "gemma4:31b-cloud"),
-                    "messages": [{"role": "user", "content": audit_prompt}],
-                    "tools": AUDIT_TOOLS,
-                    "tool_choice": "auto",
-                    "temperature": 0.0,
-                }, 
-                timeout=30
-            )
-            logger.info(f"Audit of {filename} took {time.time()-t0:.2f}s")
-            
-            resp_json = resp.json()
-            if "error" in resp_json: continue
+    try:
+        t0 = time.time()
+        resp = requests.post(
+            f"{GATE_URL}/v1/chat/completions", 
+            headers={"X-Talos-Skip-Trace": "true"},
+            json={
+                "model": os.getenv("AUDIT_MODEL", "gemma4:31b-cloud"),
+                "messages": [{"role": "user", "content": audit_prompt}],
+                "tools": AUDIT_TOOLS,
+                "tool_choice": "auto",
+                "temperature": 0.0,
+            }, 
+            timeout=60
+        )
+        logger.info(f"Full commit audit took {time.time()-t0:.2f}s")
+        
+        resp_json = resp.json()
+        if "error" in resp_json: return {"rejected": False} # Fail-open
 
-            message = resp_json.get("choices", [{}])[0].get("message", {})
-            tool_calls = message.get("tool_calls", [])
-            
-            if tool_calls:
-                tool_call = tool_calls[0]
-                func_name = tool_call["function"]["name"]
-                args = json.loads(tool_call["function"]["arguments"])
-                if func_name == "reject_commit":
-                    return {"rejected": True, "reason": f"File: {filename} - {args.get('reason')}"}
-            else:
-                content = message.get("content", "").lower()
-                if "reject_commit" in content or "violation" in content:
-                    return {"rejected": True, "reason": f"File: {filename} - Semantic rejection (fallback)"}
+        message = resp_json.get("choices", [{}])[0].get("message", {})
+        tool_calls = message.get("tool_calls", [])
+        
+        if tool_calls:
+            tool_call = tool_calls[0]
+            func_name = tool_call["function"]["name"]
+            args = json.loads(tool_call["function"]["arguments"])
+            if func_name == "reject_commit":
+                return {"rejected": True, "reason": args.get("reason", "Violation detected")}
+        else:
+            content = message.get("content", "").lower()
+            if "reject_commit" in content or "violation" in content:
+                return {"rejected": True, "reason": "Semantic rejection (fallback)"}
 
-        except Exception as e:
-            logger.warning(f"Auditor timed out or failed for {filename} ({e}). Failing open.")
+    except Exception as e:
+        logger.warning(f"Auditor timed out or failed ({e}). Failing open.")
             
     return {"rejected": False}
 

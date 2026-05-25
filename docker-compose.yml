@@ -50,7 +50,7 @@ services:
       - http_proxy=http://sentinel:8080
       - https_proxy=http://sentinel:8080
       - all_proxy=http://sentinel:8080
-      - NO_PROXY=gate,talos_gate,xray,talos_xray,sentinel,talos_sentinel,localhost,127.0.0.1,host.docker.internal,172.16.0.0/12,192.168.0.0/16,10.0.0.0/8,217.160.76.254,api.telegram.org
+      - NO_PROXY=gate,talos_gate,xray,talos_xray,sentinel,talos_sentinel,localhost,127.0.0.1,host.docker.internal,172.16.0.0/12,192.168.0.0/16,10.0.0.0/8
       - REQUESTS_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt
       - SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
     volumes:
@@ -93,7 +93,7 @@ services:
       - http_proxy=http://sentinel:8080
       - https_proxy=http://sentinel:8080
       - all_proxy=http://sentinel:8080
-      - NO_PROXY=gate,talos_gate,xray,talos_xray,sentinel,talos_sentinel,localhost,127.0.0.1,host.docker.internal,172.16.0.0/12,192.168.0.0/16,10.0.0.0/8,217.160.76.254,api.telegram.org
+      - NO_PROXY=gate,talos_gate,xray,talos_xray,sentinel,talos_sentinel,localhost,127.0.0.1,host.docker.internal,172.16.0.0/12,192.168.0.0/16,10.0.0.0/8
       - REQUESTS_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt
       - SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
     healthcheck:

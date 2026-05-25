@@ -374,6 +374,7 @@ async def chat_completions(request: Request, background_tasks: BackgroundTasks):
     body = await request.json()
     model = str(body.get("model", ""))
     is_streaming = body.get("stream", False)
+    skip_trace = request.headers.get("X-Talos-Skip-Trace") == "true"
 
     backend_key = "local"
     if "together" in model.lower():
@@ -530,20 +531,21 @@ async def chat_completions(request: Request, background_tasks: BackgroundTasks):
                             except json.JSONDecodeError:
                                 pass
                             yield f"data: {payload}\n\n".encode("utf-8")
-                _trace_writer.write_messages(
-                    body.get("messages", []),
-                    _trace_writer._normalize_content(
-                        _trace_writer._normalize_tool_calls(
-                            {
-                                "role": "assistant",
-                                "content": _accumulated_content,
-                                "reasoning": _accumulated_reasoning,
-                                "tool_calls": _accumulated_tool_calls,
-                            }
-                        )
-                    ),
-                    turn=body.get("turn"),
-                )
+                if not skip_trace:
+                    _trace_writer.write_messages(
+                        body.get("messages", []),
+                        _trace_writer._normalize_content(
+                            _trace_writer._normalize_tool_calls(
+                                {
+                                    "role": "assistant",
+                                    "content": _accumulated_content,
+                                    "reasoning": _accumulated_reasoning,
+                                    "tool_calls": _accumulated_tool_calls,
+                                }
+                            )
+                        ),
+                        turn=body.get("turn"),
+                    )
                 background_tasks.add_task(
                     log_completion,
                     body,
@@ -610,11 +612,12 @@ async def chat_completions(request: Request, background_tasks: BackgroundTasks):
                     choice["message"] = normalized
 
                 background_tasks.add_task(log_completion, body, resp_json, backend_key)
-                _trace_writer.write_messages(
-                    body.get("messages", []),
-                    resp_json.get("choices", [{}])[0].get("message", {}),
-                    turn=body.get("turn"),
-                )
+                if not skip_trace:
+                    _trace_writer.write_messages(
+                        body.get("messages", []),
+                        resp_json.get("choices", [{}])[0].get("message", {}),
+                        turn=body.get("turn"),
+                    )
                 return resp_json
         except (httpx.ConnectError, httpx.TimeoutException, httpx.HTTPStatusError) as e:
             error_msg = str(e)
