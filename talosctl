@@ -134,6 +134,7 @@ def trigger_lazarus_reset(reason="Crash detected", mode="cortex"):
     )
 
 
+
     # --- SYNC HOST FOR CONSISTENCY ---
     subprocess.run(f"git reset --hard HEAD~{depth}", shell=True, cwd=AGENT_DIR)
     subprocess.run("git clean -fd", shell=True, cwd=AGENT_DIR)
