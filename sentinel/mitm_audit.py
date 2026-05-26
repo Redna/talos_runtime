@@ -5,6 +5,7 @@ import subprocess
 import requests
 import logging
 import time
+import ast
 from mitmproxy import http
 
 # Configure logging
@@ -20,6 +21,20 @@ PII_PATTERNS = [
 ]
 PROTECTED_PATHS = ["spine/", "scripts/post-commit", ".gitmodules"]
 AGENT_APP_DIR = "/app"
+
+# Cache for the last rejection reason to serve to the agent
+LAST_REJECTION = "No recent rejections."
+REJECTION_REPORT_PATH = "/spine/last_push_error.txt"
+
+def update_rejection_report(reason: str):
+    global LAST_REJECTION
+    LAST_REJECTION = reason
+    try:
+        # Spine volume should be writable
+        with open(REJECTION_REPORT_PATH, "w") as f:
+            f.write(reason)
+    except Exception as e:
+        logger.error(f"Failed to write rejection report to {REJECTION_REPORT_PATH}: {e}")
 
 # Binary Tool Definitions for high-signal output
 AUDIT_TOOLS = [
@@ -75,13 +90,16 @@ def get_latest_commit_diff() -> str:
 def run_constitutional_audit(diff: str) -> dict:
     if not diff: return {"rejected": False}
     
+    # Pre-audit check: skip if it's a known safe system commit
     if "[Post-commit]" in diff or "chore: end-to-end" in diff:
         return {"rejected": False}
 
     constitution_path = os.path.join(AGENT_APP_DIR, "CONSTITUTION.md")
     constitution = ""
     if os.path.exists(constitution_path):
-        with open(constitution_path, "r") as f: constitution = f.read()
+        try:
+            with open(constitution_path, "r") as f: constitution = f.read()
+        except: pass
 
     # 1. Hard Path Protections & Static Security Scans
     for chunk in re.split(r"(?=^diff --git )", diff, flags=re.MULTILINE):
@@ -100,21 +118,19 @@ def run_constitutional_audit(diff: str) -> dict:
             return {"rejected": True, "reason": f"Secret detected in {filename}"}
 
     # 2. Syntactic Quality Pass (Syntax Gate)
+    # 100% in-memory check using AST to avoid Read-Only filesystem errors
     py_files = re.findall(r"^diff --git a/(.*\.py) b/.*$", diff, re.MULTILINE)
     for py_file in py_files:
         try:
-            # Check the actual file on disk since it matches the proposed commit in the shared volume
             file_path = os.path.join(AGENT_APP_DIR, py_file)
             if os.path.exists(file_path):
-                # Set environment to prevent writing __pycache__ on read-only mount
-                env = os.environ.copy()
-                env["PYTHONDONTWRITEBYTECODE"] = "1"
-                res = subprocess.run(["python3", "-m", "py_compile", file_path], capture_output=True, text=True, timeout=5, env=env)
-                if res.returncode != 0:
-                    error_msg = res.stderr.strip().replace(file_path, py_file)
-                    return {"rejected": True, "reason": f"Syntax Gate Violation in {py_file}:\n{error_msg}"}
+                with open(file_path, "r", encoding="utf-8") as f:
+                    source = f.read()
+                    ast.parse(source)
+        except SyntaxError as e:
+            return {"rejected": True, "reason": f"Syntax Gate Violation in {py_file}: {e.msg} (Line {e.lineno})"}
         except Exception as e:
-            logger.warning(f"Syntax Gate error for {py_file}: {e}")
+            logger.warning(f"Syntax Gate internal error for {py_file}: {e}")
 
     # 3. Semantic Constitutional Audit
     audit_prompt = f"""Your task is to critically audit your latest changes:
@@ -143,6 +159,10 @@ If it is fully compliant, call 'approve_commit'.
         )
         logger.info(f"Full commit audit took {time.time()-t0:.2f}s")
         
+        if resp.status_code != 200:
+             logger.warning(f"Auditor returned HTTP {resp.status_code}. Failing open.")
+             return {"rejected": False}
+
         resp_json = resp.json()
         if "error" in resp_json: return {"rejected": False} # Fail-open
 
@@ -175,10 +195,16 @@ def log_traffic(message: str):
     except: pass
 
 def request(flow: http.HTTPFlow) -> None:
+    global LAST_REJECTION
     path = flow.request.path.lower()
     method = flow.request.method
     host = flow.request.pretty_host
     
+    # Rejection Mirror API (Internal)
+    if path == "/v1/sentinel/rejection" and method == "GET":
+        flow.response = http.Response.make(200, LAST_REJECTION.encode(), {"Content-Type": "text/plain"})
+        return
+
     # Traffic Sniffing
     log_traffic(f"REQ: {method} {flow.request.url}")
     
@@ -189,8 +215,10 @@ def request(flow: http.HTTPFlow) -> None:
         # Hard block pushes to talos_seed
         body = flow.request.get_text() or ""
         if "refs/heads/talos_seed" in body:
-            logger.warning("BLOCKING PUSH: Attempted push to talos_seed branch!")
-            flow.response = http.Response.make(403, b"SENTINEL REJECTED: Pushing to 'talos_seed' is FORBIDDEN. Use the 'experiment' branch.", {"Content-Type": "text/plain"})
+            reason = "Pushing to 'talos_seed' is FORBIDDEN. Use the 'experiment' branch."
+            update_rejection_report(f"PUSH BLOCKED: {reason}")
+            logger.warning(f"BLOCKING PUSH: {reason}")
+            flow.response = http.Response.make(403, f"SENTINEL REJECTED: {reason}".encode(), {"Content-Type": "text/plain"})
             return
 
         diff = get_latest_commit_diff()
@@ -198,20 +226,23 @@ def request(flow: http.HTTPFlow) -> None:
             audit_res = run_constitutional_audit(diff)
             if audit_res.get("rejected"):
                 reason = audit_res.get("reason", "Violation detected")
+                update_rejection_report(f"PUSH BLOCKED: {reason}")
                 logger.warning(f"BLOCKING PUSH: {reason}")
                 flow.response = http.Response.make(403, f"SENTINEL REJECTED: {reason}".encode(), {"Content-Type": "text/plain"})
                 return
 
     # General POST Audit (skip internal LLM traffic)
-    elif method == "POST" and "git-upload-pack" not in path and "v1/chat/completions" not in path:
+    elif method == "POST" and "git-upload-pack" not in path and "v1/chat/completions" not in path and "v1/sentinel" not in path:
         try:
             content = flow.request.get_text() or flow.request.content.decode("utf-8", errors="ignore")
             if content:
                 for pattern in PII_PATTERNS:
                     if re.search(pattern, content):
+                        update_rejection_report("PII Detected in POST body")
                         flow.response = http.Response.make(403, b"SENTINEL REJECTED: PII Detected", {"Content-Type": "text/plain"})
                         return
                 if "ghp_" in content or "sk-" in content:
+                    update_rejection_report("Secret Detected in POST body")
                     flow.response = http.Response.make(403, b"SENTINEL REJECTED: Secret Detected", {"Content-Type": "text/plain"})
                     return
         except: pass
