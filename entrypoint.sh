@@ -4,7 +4,12 @@
 mkdir -p "$HOME"
 chown -R "$USER_ID:$GROUP_ID" "$HOME"
 
+# For the initial clone we need the real GITHUB_TOKEN (the nono proxy
+# starts later, inside the Spine).  Immediately after clone we replace
+# the remote URL with a dummy token so the Cortex never sees the real
+# one — subsequent pushes go through the proxy which injects it.
 GIT_REPO=https://x-access-token:${GITHUB_TOKEN}@github.com/Redna/talos.git
+GIT_REPO_DUMMY=https://x-access-token:nono-dummy@github.com/Redna/talos.git
 GIT_BRANCH=talos_seed
 
 git config --global --add safe.directory '*'
@@ -58,6 +63,9 @@ VOLATILE_BRANCH=${VOLATILE_BRANCH:-experiment}
 if [ -d /app/.git ] && [ "${FORCE_FRESH_CLONE:-0}" != "1" ]; then
     echo "[Entrypoint] Existing repo found, preserving state..."
     cd /app
+    # Always replace the remote URL with the dummy token so the Cortex
+    # never sees a real credential in `git remote get-url origin`.
+    git remote set-url origin "$GIT_REPO_DUMMY" 2>/dev/null || true
     # Ensure the user has the latest remote state for the experiment branch
     sudo -u "$USER_NAME" -H git fetch origin "$VOLATILE_BRANCH" 2>/dev/null || true
 else
@@ -65,6 +73,9 @@ else
     rm -rf /app/.[!.]* /app/* 2>/dev/null
     git clone -b "$GIT_BRANCH" "$GIT_REPO" /app
     cd /app
+    # Replace the real-token URL with dummy so the Cortex never sees it.
+    # Subsequent pushes go through the nono proxy which injects the real token.
+    git remote set-url origin "$GIT_REPO_DUMMY"
     echo "[Entrypoint] Creating new volatile branch: $VOLATILE_BRANCH from seed"
     # Create the branch and set up upstream tracking immediately
     git checkout -b "$VOLATILE_BRANCH"
@@ -109,11 +120,10 @@ echo "[Entrypoint] Recorded good commit: $COMMIT"
 sudo -u "$USER_NAME" -H git config --global user.name "Talos"
 sudo -u "$USER_NAME" -H git config --global user.email "talos@agent.local"
 
-if [ -n "$GITHUB_TOKEN" ]; then
-    echo "https://x-access-token:${GITHUB_TOKEN}@github.com" > /tmp/git_credentials
-    chmod 600 /tmp/git_credentials
-    sudo -u "$USER_NAME" -H git config --global credential.helper "store --file /tmp/git_credentials"
-fi
+# The credential proxy is not configured here (it starts later inside
+# the Spine process, after this entrypoint).  The sandbox module
+# (spine/sandbox.py) passes proxy env vars to the Cortex child via
+# proxy.sandbox_env() — no global git http.proxy configuration needed.
 
 if [ -f "/runtime_scripts/setup_hooks.sh" ]; then
     /bin/bash /runtime_scripts/setup_hooks.sh
