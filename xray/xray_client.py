@@ -5,12 +5,27 @@ import datetime
 import json
 import logging
 import os
+import sys
 from pathlib import Path
 from typing import Any, Callable
 
 import httpx
 
 logger = logging.getLogger("xray.client")
+
+# Pull in the runtime-wide secret scrubber. The xray container runs with
+# WORKDIR=/app, so we add the sibling runtime_scripts/ directory to
+# sys.path explicitly. If the import ever fails (e.g. mounted volume
+# missing), we fall back to no-op pass-throughs so the dashboard keeps
+# working.
+_RUNTIME_SCRIPTS_DIR = Path(__file__).resolve().parent.parent / "runtime_scripts"
+if str(_RUNTIME_SCRIPTS_DIR) not in sys.path:
+    sys.path.insert(0, str(_RUNTIME_SCRIPTS_DIR))
+try:
+    from secret_scrubber import scrub_dict  # type: ignore
+except Exception:  # pragma: no cover - defensive
+    def scrub_dict(value):  # type: ignore
+        return value
 
 
 class XRayClient:
@@ -90,6 +105,13 @@ class XRayClient:
                             if not line:
                                 continue
                             msg = json.loads(line)
+                            # Defence in depth: even though the Gate's
+                            # MessageTraceWriter now scrubs at write time,
+                            # we scrub again on read so any pre-existing
+                            # log file (e.g. one written before this fix)
+                            # never leaks raw tokens to the dashboard via
+                            # the WebSocket stream.
+                            msg = scrub_dict(msg)
                             turn = msg.get("_turn", 0)
                             if self._messages:
                                 last_turn = self._messages[-1].get("_turn", 0)

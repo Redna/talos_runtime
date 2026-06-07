@@ -1,5 +1,6 @@
 import os
 import json
+import sys
 import time
 from pathlib import Path
 from datetime import datetime, timezone
@@ -19,6 +20,22 @@ from fastapi import (
 from fastapi.responses import JSONResponse, StreamingResponse
 from dotenv import load_dotenv
 from tokenizer import TokenizerManager
+
+# Pull in the runtime-wide secret scrubber so that anything we write to
+# llm_logs/ or xray_data/messages/*.jsonl is sanitised at write time. The
+# gate runs with WORKDIR=/gate, so we add the sibling runtime_scripts/
+# directory to sys.path explicitly rather than relying on PYTHONPATH.
+_RUNTIME_SCRIPTS_DIR = Path(__file__).resolve().parent.parent / "runtime_scripts"
+if str(_RUNTIME_SCRIPTS_DIR) not in sys.path:
+    sys.path.insert(0, str(_RUNTIME_SCRIPTS_DIR))
+try:
+    from secret_scrubber import scrub, scrub_dict  # type: ignore
+except Exception:  # pragma: no cover - defensive: never crash the gate
+    def scrub(text):  # type: ignore
+        return text
+
+    def scrub_dict(value):  # type: ignore
+        return value
 
 # Talos Gate - v1.1
 load_dotenv()
@@ -148,6 +165,13 @@ class MessageTraceWriter:
         else:
             self._trace_turn += 1
             turn = self._trace_turn
+
+        # Sanitise at write time. Tool output echoed back by the agent can
+        # contain real GitHub OAuth tokens (see the 2026-06-07 incident);
+        # the xray tail reads from this file and broadcasts to the
+        # dashboard, so anything we leak here ends up on the user's screen.
+        request_messages = scrub_dict(request_messages) if request_messages else request_messages
+        response_message = scrub_dict(response_message) if response_message else response_message
 
         for msg in request_messages:
             if "_turn" in msg:
@@ -356,6 +380,11 @@ def log_completion(
             "cost": cost,
             "is_stream": is_stream,
         }
+        # Strip secrets at write time so the llm_logs/*.json files never
+        # contain real GitHub / Together / NVIDIA / OpenAI / Anthropic /
+        # Telegram tokens. See the 2026-06-07 incident where a `git config
+        # --list --show-origin` tool result embedded the OAuth token.
+        log_data = scrub_dict(log_data)
         log_file.write_text(
             json.dumps(log_data, indent=2, default=str), encoding="utf-8"
         )
@@ -958,7 +987,10 @@ async def xray_history_detail(filename: str):
         raise HTTPException(status_code=404, detail="Not found")
     if not str(filepath).startswith(str(LOG_DIR)):
         raise HTTPException(status_code=403, detail="Forbidden")
-    return json.loads(filepath.read_text())
+    # Defence in depth: even if an old log file predates the scrubber
+    # (e.g. one written on 2026-05-24 before this fix), scrub on read so
+    # the dashboard never sees raw tokens.
+    return scrub_dict(json.loads(filepath.read_text()))
 
 
 @app.post("/v1/xray/reset-trace")
