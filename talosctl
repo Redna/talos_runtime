@@ -45,6 +45,44 @@ UPTIME_STABILITY_THRESHOLD = 300
 MAX_COGNITIVE_STALL_SECONDS = 600
 MAX_REVERSAL_DEPTH = 5
 
+# --- Kernel / nono support check ---
+def check_nono_support():
+    """Verify the host kernel supports nono's Landlock-based sandboxing.
+
+    Returns a dict with *supported* (bool) and *details* (str).
+    Nono requires Linux kernel 5.13+ with Landlock enabled.
+    """
+    import platform
+    kernel = platform.release()  # e.g. "6.8.0-117-generic"
+
+    # Parse kernel version: major.minor
+    parts = kernel.split(".")[:2]
+    try:
+        major, minor = int(parts[0]), int(parts[1])
+    except (ValueError, IndexError):
+        return {"supported": False, "details": f"Cannot parse kernel version: {kernel}"}
+
+    if major < 5 or (major == 5 and minor < 13):
+        return {
+            "supported": False,
+            "details": (
+                f"Kernel {kernel} is below minimum 5.13 — Landlock not available. "
+                "The agent will still run, but without kernel-level sandboxing. "
+                "Upgrade your host kernel for full nono protection."
+            ),
+        }
+
+    # Try the in-process Python check too (if nono-py is installed locally)
+    try:
+        import nono_py
+        if nono_py.is_supported():
+            return {"supported": True, "details": f"Kernel {kernel} — Landlock supported"}
+        else:
+            return {"supported": False, "details": f"Kernel {kernel} is 5.13+ but Landlock is not available (may need CONFIG_LANDLOCK=y)"}
+    except ImportError:
+        return {"supported": True, "details": f"Kernel {kernel} matches 5.13+ requirement (nono-py not installed on host for runtime check)"}
+
+
 def ensure_run_dir():
     if not RUN_DIR.exists():
         RUN_DIR.mkdir(parents=True, exist_ok=True)
@@ -380,6 +418,9 @@ def run_daemon(fresh=False):
         if PID_FILE.exists(): PID_FILE.unlink()
         sys.exit(1)
 
+    print("[DAEMON] Starting Ollama Proxy...", flush=True)
+    subprocess.run(f"docker compose {compose_args} up -d ollama_proxy", shell=True, cwd=RUNTIME_DIR, capture_output=True, text=True)
+
     print("[DAEMON] Starting Gate...", flush=True)
     res = subprocess.run(f"docker compose {compose_args} up -d {recreate} gate", shell=True, cwd=RUNTIME_DIR, capture_output=True, text=True)
     if res.returncode != 0:
@@ -475,6 +516,13 @@ def start(fresh=False):
             print(f"Watchdog already running (PID: {pid}).")
             return
         except: PID_FILE.unlink()
+
+    # Check kernel support for nono sandboxing (Linux 5.13+ with Landlock)
+    nono_status = check_nono_support()
+    if nono_status["supported"]:
+        print(f"  Nono sandbox:  {nono_status['details']}")
+    else:
+        print(f"\033[93m  ⚠ Nono sandbox: {nono_status['details']}\033[0m")
 
     if fresh:
         os.environ["FORCE_FRESH_CLONE"] = "1"
@@ -784,6 +832,7 @@ if __name__ == "__main__":
     subparsers.add_parser("logs")
     subparsers.add_parser("monitor")
     subparsers.add_parser("status")
+    subparsers.add_parser("check", help="Verify host kernel supports nono sandbox (Linux 5.13+ with Landlock)")
     daemon_parser = subparsers.add_parser("daemon")
     daemon_parser.add_argument("--fresh", action="store_true")
     subparsers.add_parser("pause")
@@ -802,7 +851,13 @@ if __name__ == "__main__":
         parser.print_help()
         sys.exit(1)
 
-    if args.command == "start": start(args.fresh)
+    if args.command == "check":
+        status = check_nono_support()
+        if status["supported"]:
+            print(f"\033[92m✓ {status['details']}\033[0m")
+        else:
+            print(f"\033[93m✗ {status['details']}\033[0m")
+    elif args.command == "start": start(args.fresh)
     elif args.command == "stop": stop()
     elif args.command == "logs": logs()
     elif args.command == "monitor": monitor()
