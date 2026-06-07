@@ -7,8 +7,9 @@ services:
       - GATE_URL=http://gate:4000
       - AUDIT_MODEL=${TALOS_CLOUD_MODEL:-gemma4:31b-cloud}
     networks:
-      - talos_internal
-      - talos_external
+      talos_internal:
+        ipv4_address: 172.21.0.2
+      talos_external:
     ports:
       - "8080:8080" # Proxy
       - "8081:8081" # Web UI (Optional)
@@ -16,6 +17,7 @@ services:
       - sentinel_ca:/root/.mitmproxy
       - talos_app:/app:ro
       - ./sentinel/mitm_audit.py:/sentinel/mitm_audit.py:ro
+      - spine_observability:/spine:rw
     healthcheck:
       test: ["CMD", "python3", "-c", "import socket; s = socket.socket(); s.connect(('localhost', 8080))"]
       interval: 5s
@@ -29,7 +31,10 @@ services:
     container_name: talos_agent
     cap_add:
       - LINUX_IMMUTABLE
-      - SYS_ADMIN
+      # SYS_ADMIN intentionally removed: the kernel-enforced nono sandbox
+      # (Landlock) does not need it, and dropping it eliminates a large class
+      # of container-escape vectors. If a regression appears, see AGENTS.md
+      # "Nono sandbox" section before re-adding.
     env_file: .env
     environment:
       - PYTHONUNBUFFERED=1
@@ -47,9 +52,9 @@ services:
       - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN:-}
       - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID:-0}
       - MEMORY_DIR=/app/memory
-      - http_proxy=http://sentinel:8080
-      - https_proxy=http://sentinel:8080
-      - all_proxy=http://sentinel:8080
+      - http_proxy=http://172.21.0.2:8080
+      - https_proxy=http://172.21.0.2:8080
+      - all_proxy=http://172.21.0.2:8080
       - NO_PROXY=gate,talos_gate,xray,talos_xray,sentinel,talos_sentinel,localhost,127.0.0.1,host.docker.internal,172.16.0.0/12,192.168.0.0/16,10.0.0.0/8
       - REQUESTS_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt
       - SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
@@ -90,10 +95,10 @@ services:
       - DATA_DIR=/data
       - DAILY_BUDGET_LIMIT=${DAILY_BUDGET_LIMIT:-5.00}
       - TALOS_CONTEXT_WINDOW=${TALOS_CONTEXT_WINDOW:-71680}
-      - http_proxy=http://sentinel:8080
-      - https_proxy=http://sentinel:8080
-      - all_proxy=http://sentinel:8080
-      - NO_PROXY=gate,talos_gate,xray,talos_xray,sentinel,talos_sentinel,localhost,127.0.0.1,host.docker.internal,172.16.0.0/12,192.168.0.0/16,10.0.0.0/8
+      - http_proxy=http://172.21.0.2:8080
+      - https_proxy=http://172.21.0.2:8080
+      - all_proxy=http://172.21.0.2:8080
+      - NO_PROXY=gate,talos_gate,xray,talos_xray,sentinel,talos_sentinel,localhost,127.0.0.1,host.docker.internal,172.16.0.0/12,192.168.0.0/16,10.0.0.0/8,217.160.76.254
       - REQUESTS_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt
       - SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
     healthcheck:
@@ -103,8 +108,8 @@ services:
       retries: 20
       start_period: 10s
     networks:
-      - talos_internal
-      - talos_external
+      talos_internal:
+      talos_external:
     depends_on:
       sentinel:
         condition: service_healthy
@@ -142,6 +147,9 @@ services:
 networks:
   talos_internal:
     internal: true
+    ipam:
+      config:
+        - subnet: 172.21.0.0/16
   talos_external:
     driver: bridge
 

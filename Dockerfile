@@ -37,6 +37,15 @@ RUN ARCH=$(dpkg --print-architecture) && \
 # Install uv for fast package management
 RUN curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR="/usr/local/bin" sh
 
+# Install nono (kernel-enforced sandboxing) — both the Python bindings and the CLI.
+# The .deb is part of the build context; nono-py comes in via requirements.txt.
+# The Spine orchestrates the Cortex inside the nono sandbox via nono.sandboxed_exec().
+COPY talos_runtime/nono-cli_0.61.2_amd64.deb /tmp/nono-cli.deb
+RUN dpkg -i /tmp/nono-cli.deb && \
+    rm /tmp/nono-cli.deb && \
+    nono --version && \
+    python3 -c "import nono_py; from nono_py import is_supported, support_info; print('nono-py loaded, supported=', is_supported())"
+
 # Allow git to work regardless of directory ownership (container runs as different users)
 RUN git config --system --add safe.directory '*'
 
