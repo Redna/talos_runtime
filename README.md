@@ -184,6 +184,51 @@ The agent's operating principles are defined in `talos/CONSTITUTION.md` (10 prin
 - **P6 (Becoming):** Tokens are the vital resource; `fold_context` must be used proactively
 - **P10 (Stream Integrity):** The conversation stream is immutable and append-only; the frozen prefix must never change to preserve KV-cache
 
+## Nono Sandbox
+
+The Cortex runs inside a **nono** capability-based sandbox, enforced at the kernel level via Linux Landlock. This is orthogonal to the Sentinel Proxy (semantic/PII audit) and Docker network isolation — it provides a hard boundary the agent cannot cross even via `eval`, `exec`, or `ctypes`.
+
+### What nono enforces
+
+| Layer | Enforcement |
+|---|---|
+| **Filesystem** | Allowlist-based — R/W only on explicit working directories (/app, /memory, /spine, /home/talos, /tmp, /venv, etc.). Attempts to write outside the allowlist return EACCES from the kernel. |
+| **Network** | Per-host allowlist via a credential-injection proxy. The Cortex sees dummy API keys; the real `GITHUB_TOKEN` and `TELEGRAM_BOT_TOKEN` live in the proxy and are injected on matching outbound requests. The agent literally cannot exfiltrate them. |
+| **Credentials** | The proxy swaps dummy tokens for real ones transparently. Cloud metadata endpoints (169.254.169.254) and private RFC1918 ranges are hard-denied. |
+| **Snapshots** | Content-addressable snapshots with SHA-256 dedup and Merkle-tree integrity. Baseline at boot, incremental every N turns, restore on Lazarus Protocol. |
+| **Audit** | Append-only NDJSON log with Merkle-chained tamper detection. `verify_log()` confirms integrity. |
+
+### Requirements
+
+- Linux kernel **5.13+** with Landlock (`CONFIG_SECURITY_LANDLOCK=y`)
+- Run `./talosctl check` to verify your host
+
+### Disabling the sandbox
+
+For debugging or testing:
+
+```bash
+# Set in .env to disable the sandbox at the Spine level
+NONO_ENABLED=0
+
+# Or add to spine_config.json:
+# { "nono_enabled": false }
+```
+
+When nono is unavailable (unsupported kernel, missing nono-py package), the Spine falls back to the classic `subprocess.Popen` behavior — the agent runs without kernel-level sandboxing but everything else (Sentinel, Docker network isolation, immutability) still works.
+
+### How it fits the security stack
+
+```
+Outbound request → Cortex (sandboxed)
+                     │
+                     ├── nono proxy (credential injection + host allowlist)
+                     │
+                     ├── Sentinel mitmproxy (PII/secret/constitutional audit)
+                     │
+                     └── Docker talos_internal network (internal: true)
+```
+
 ## License
 
 Private repository. All rights reserved.
