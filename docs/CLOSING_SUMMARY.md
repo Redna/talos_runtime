@@ -14,6 +14,17 @@ However, the upstream model (gemma4:31b, served locally via Ollama) was the fund
 
 ---
 
+## Post-Experiment 1
+
+After this report, two further developments occurred:
+
+- **Experiment 2** (May 15 – 27, 2026) is documented in [`reports/EXPERIMENT_2_REPORT_2026-05-15-to-2026-05-27.md`](../reports/EXPERIMENT_2_REPORT_2026-05-15-to-2026-05-27.md). The agent ran for ~10 days on `gemma4:31b-cloud` (via TogetherAI) and produced 90 commits on `feat/talos` plus 11 on a parallel `experiment` branch before the run was terminated by a Telegram poller SSL timeout at 2026-05-27 ~15:05 UTC. See [`docs/POSTMORTEM_2026-05-27.md`](POSTMORTEM_2026-05-27.md) for the crash writeup.
+- The **Nono integration** (June 2026) added kernel-enforced Landlock sandboxing around the Cortex, credential injection at the network layer, container cgroup limits, and content-addressable Merkle-chained audit. The implementation lives in `talos/spine/sandbox.py` and `talos/spine/nono_policy.py`; the runtime changes are in `docker-compose.yml` (cgroup cap), `Dockerfile` (nono-cli install), and `talosctl` (new `check` subcommand).
+
+The project is currently between runs.
+
+---
+
 ## Architecture
 
 Talos runs as two processes inside a single Docker container, communicating via a Unix domain socket using JSON-RPC:

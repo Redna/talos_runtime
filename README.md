@@ -1,9 +1,11 @@
 # Talos Runtime
 
-> **Experiment Complete (April 27 – May 6, 2026).** This was a 10-day autonomous agent experiment.
-> See [docs/CLOSING_SUMMARY.md](docs/CLOSING_SUMMARY.md) for the full wrap-up report,
-> [docs/ACTION_ITEMS.md](docs/ACTION_ITEMS.md) for 18 prioritized seed improvement tasks,
-> and [docs/analysis/pain-points.md](docs/analysis/pain-points.md) for detailed findings.
+> **Two experiments complete; between runs.** Experiment 1 ran April 27 – May 6, 2026 (~10 days).
+> Experiment 2 ran May 15 – 27, 2026 and was terminated by a Telegram poller SSL timeout on May 27.
+> See [docs/CLOSING_SUMMARY.md](docs/CLOSING_SUMMARY.md) for Experiment 1's wrap-up report,
+> [reports/EXPERIMENT_2_REPORT_2026-05-15-to-2026-05-27.md](reports/EXPERIMENT_2_REPORT_2026-05-15-to-2026-05-27.md)
+> for Experiment 2's report, and [docs/POSTMORTEM_2026-05-27.md](docs/POSTMORTEM_2026-05-27.md) for the
+> crash post-mortem.
 
 Operational environment for the Talos self-evolving autonomous agent.
 
@@ -72,19 +74,26 @@ Note: Without the watchdog, crash recovery and the Lazarus Protocol are unavaila
 
 ```
 talos_runtime/                  ← This repo (infrastructure)
-  docker-compose.yml            ← Service definitions
-  Dockerfile                    ← Container build (Python only, no Go)
+  docker-compose.yml            ← Service definitions (includes nono cgroup limits)
+  Dockerfile                    ← Container build (Python only, no Go; installs nono-cli)
   entrypoint.sh                 ← Starts Spine + Cortex
   spine_config.json             ← Spine configuration
   gate/                         ← LLM proxy (FastAPI)
   memory/                       ← Agent state (gitignored, bind-mounted)
   models/                       ← .gguf model files (gitignored)
+  reports/                      ← Per-experiment reports (Experiment 1 + 2)
+  runtime_scripts/
+    constitutional_auditor.py   ← Zero-temperature audit gate
+    secret_scrubber.py          ← Scrubs tokens from Gate/xray output at write time
   scripts/
     setup_hooks.sh              ← Pre-commit hook installer
-    constitutional_auditor.py   ← Zero-temperature audit gate
+  sentinel/                     ← Semantic Firewall (mitmproxy)
   talos/                        ← Git submodule → talos agent repo
-  talosctl                      ← Watchdog daemon (start/stop/monitor/logs/status)
-  tests/                        ← Integration tests
+  talosctl                      ← Watchdog daemon (start/stop/monitor/logs/status/check)
+  tests/                        ← Runtime-level tests (e.g. test_secret_scrubber.py)
+  xray/                         ← Live dashboard
+  nono-cli_0.61.2_amd64.deb     ← The nono CLI installer (sideloaded into the image)
+  .gitguardian.yaml             ← Ignore policy for the entrypoint.sh token-template URL
 
 talos/                          ← Agent repo (submodule, separate git repo)
   cortex/                       ← Agent source code
@@ -96,11 +105,13 @@ talos/                          ← Agent repo (submodule, separate git repo)
     main.py                     ← Entry point
     config.py / ipc_server.py / stream.py / constitution.py
     supervisor.py / health.py / events.py / snapshot.py
+    nono_policy.py              ← Writes the nono CLI policy manifest
+    sandbox.py                  ← Popen wrapper around `nono run --config` + rlimits
     control_plane.py / telegram.py
-  tests/                        ← All agent tests (cortex + spine)
+  tests/                        ← Cortex + spine tests
     test_*.py                   ← Example-based tests
     *_hypothesis.py             ← Property-based tests (hypothesis)
-    spine/                      ← Spine-specific tests
+  tests-spine/                  ← Spine-specific nono sandbox tests
   CONSTITUTION.md               ← Agent's core principles (P0-P10)
   identity.md                   ← Agent's identity document
   pyproject.toml / uv.lock      ← Dependency management
@@ -108,12 +119,23 @@ talos/                          ← Agent repo (submodule, separate git repo)
 
 ## Architecture
 
-Two processes run inside the Talos container:
+Three processes run inside the Talos container, with a nono CLI wrapper around the Cortex:
 
 1. **Spine** (`python -m spine`) — the brainstem. Manages the LLM stream, enforces the constitution, supervises the Cortex, and provides the IPC server. Runs as root.
-2. **Cortex** (`python seed_agent.py`) — the mind. Runs the ReAct loop, calls tools, self-modifies code. Runs as the `talos` user.
+2. **nono CLI** (`nono run --config /spine/nono_policy.json -- ...`) — kernel-enforced Landlock wrapper around the Cortex. Owns the policy manifest, the credential-injection network policy, and signal isolation. Runs as root.
+3. **Cortex** (`python seed_agent.py`) — the mind. Runs the ReAct loop, calls tools, self-modifies code. Runs as the `talos` user, inside the nono Landlock boundary.
 
-They communicate via Unix domain socket at `/tmp/spine.sock` using JSON-RPC.
+They communicate via Unix domain socket at `/tmp/spine.sock` using JSON-RPC. The Spine supervises the nono Popen (not the Cortex directly), so it can SIGTERM / SIGKILL a hung Cortex by PID.
+
+### Three layers of defense
+
+| Layer | What it caps | Where |
+|---|---|---|
+| **nono Landlock** | Filesystem R/W, network egress, signal forwarding | `talos/spine/nono_policy.py` → `/spine/nono_policy.json` |
+| **preexec_fn rlimits** | CPU 30 min, AS 8 GB, NOFILE 4096 | `talos/spine/sandbox.py::_set_cortex_rlimits` |
+| **cgroup cap** | cpus 2.0, memory 8 GB | `docker-compose.yml` `services.talos.deploy.resources.limits` |
+
+The cgroup is the unbypassable backstop: the Cortex cannot raise its own rlimits above it, and the Compose file is bind-mounted read-only from the host.
 
 See [ARCHITECTURE.md](docs/docs/ARCHITECTURE.md) for the full technical specification.
 
@@ -162,7 +184,7 @@ Slug convention: strip `.gguf`, strip quant suffix (everything from `-UD-` or `-
 ### Run Python tests
 
 ```bash
-cd talos && python3 -m pytest tests/ -v
+cd talos && python3 -m pytest tests-spine/ tests/ -v
 ```
 
 ### Run Go tests (if working on infrastructure tooling)
@@ -188,15 +210,25 @@ The agent's operating principles are defined in `talos/CONSTITUTION.md` (10 prin
 
 The Cortex runs inside a **nono** capability-based sandbox, enforced at the kernel level via Linux Landlock. This is orthogonal to the Sentinel Proxy (semantic/PII audit) and Docker network isolation — it provides a hard boundary the agent cannot cross even via `eval`, `exec`, or `ctypes`.
 
+The Spine runs nono as a subprocess (the `nono run --config /spine/nono_policy.json -- ...` CLI, see `talos/spine/sandbox.py`). The Phase 2b design replaced the original `nono_py.sandboxed_exec()` Python API with a real `subprocess.Popen` wrapper so the Spine can `SIGTERM` / `SIGKILL` a hung Cortex by its real PID.
+
 ### What nono enforces
 
 | Layer | Enforcement |
 |---|---|
-| **Filesystem** | Allowlist-based — R/W only on explicit working directories (/app, /memory, /spine, /home/talos, /tmp, /venv, etc.). Attempts to write outside the allowlist return EACCES from the kernel. |
-| **Network** | Per-host allowlist via a credential-injection proxy. The Cortex sees dummy API keys; the real `GITHUB_TOKEN` and `TELEGRAM_BOT_TOKEN` live in the proxy and are injected on matching outbound requests. The agent literally cannot exfiltrate them. |
-| **Credentials** | The proxy swaps dummy tokens for real ones transparently. Cloud metadata endpoints (169.254.169.254) and private RFC1918 ranges are hard-denied. |
+| **Filesystem** | Allowlist-based — R/W only on explicit working directories (/app, /memory, /spine, /home/talos, /tmp, /venv, etc.) plus the built-in `python_runtime` and `git_config` groups from nono's `default` profile. Attempts to write outside the allowlist return EACCES from the kernel. |
+| **Network** | Per-host allowlist via the `network.allow_domain` block in the policy. Credentials are injected at the **network layer** (not the process layer): the Cortex sees dummy API keys, and nono's network proxy swaps them for the real `GITHUB_TOKEN` / `TELEGRAM_BOT_TOKEN` on matching outbound requests. The agent literally cannot exfiltrate them. The full injection config lives under `network.custom_credentials` in the policy. |
+| **Credentials** | Real tokens live in the proxy, never in the sandbox env. Cloud metadata endpoints (169.254.169.254) and private RFC1918 ranges are hard-denied. |
 | **Snapshots** | Content-addressable snapshots with SHA-256 dedup and Merkle-tree integrity. Baseline at boot, incremental every N turns, restore on Lazarus Protocol. |
 | **Audit** | Append-only NDJSON log with Merkle-chained tamper detection. `verify_log()` confirms integrity. |
+| **rlimits** | `preexec_fn` in `talos/spine/sandbox.py` sets `RLIMIT_CPU=1800s`, `RLIMIT_AS=8GB`, `RLIMIT_NOFILE=4096` on the nono Popen (inherited by the Cortex). |
+| **cgroup** | `docker-compose.yml` `services.talos.deploy.resources.limits` caps cpus at 2.0 and memory at 8 GB. This is the unbypassable backstop — the Cortex cannot raise its own rlimits above the cgroup. |
+
+### Three layers of defense
+
+1. **nono Landlock** — kernel-enforced filesystem + network + signal boundaries.
+2. **preexec_fn rlimits** — agent-aware soft caps (CPU, AS, NOFILE).
+3. **cgroup** — kernel-enforced hard caps the agent cannot escape.
 
 ### Requirements
 
@@ -222,12 +254,28 @@ When nono is unavailable (unsupported kernel, missing nono-py package), the Spin
 ```
 Outbound request → Cortex (sandboxed)
                      │
-                     ├── nono proxy (credential injection + host allowlist)
+                     ├── nono CLI (Landlock + network policy)
+                     │     ├── custom_credentials (github / telegram)
+                     │     └── group: python_runtime, git_config
+                     │
+                     ├── preexec_fn rlimits (CPU, AS, NOFILE)
+                     │
+                     ├── cgroup cap (cpus 2.0, mem 8G)
                      │
                      ├── Sentinel mitmproxy (PII/secret/constitutional audit)
                      │
                      └── Docker talos_internal network (internal: true)
 ```
+
+## `talosctl check`
+
+The `check` subcommand verifies the host kernel supports the nono Landlock sandbox:
+
+```bash
+./talosctl check
+```
+
+It inspects `/proc/version`, parses the kernel major/minor, and (if nono-py is importable) calls `is_supported()`. Output is a green check on success or a yellow cross on failure. Run it once after provisioning a new host, or in CI before launching the agent.
 
 ## License
 
