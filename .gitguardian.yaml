@@ -1,0 +1,22 @@
+version: 1
+
+# Ignore matches for the talos runtime repo.
+#
+# The nono integration's entrypoint.sh builds a git clone URL with
+# an x-access-token:VAR@host pattern, where VAR is a shell variable
+# that resolves to the real token at runtime. Static secret scanners
+# flag the literal pattern even though no real token is present in
+# the file at commit time. The runtime value is then sanitized at
+# write-time by runtime_scripts/secret_scrubber.py before any logs
+# hit disk.
+#
+# This file tells GitGuardian's scanner to skip that line.
+ignore-matches:
+  - name: entrypoint-git-clone-url-template
+    # Match the Basic Auth URL pattern in entrypoint.sh only.
+    filepattern: "entrypoint.sh"
+    matches:
+      # The git clone URL line. The "${GITHUB_TOKEN}" is a shell
+      # variable, not a real credential.
+      - name: Basic Auth String
+        match: 'https://x-access-token:\$\{GITHUB_TOKEN\}@github\.com/.*'
