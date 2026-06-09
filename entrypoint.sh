@@ -10,7 +10,9 @@ chown -R "$USER_ID:$GROUP_ID" "$HOME"
 # one — subsequent pushes go through the proxy which injects it.
 GIT_REPO=https://x-access-token:${GITHUB_TOKEN}@github.com/Redna/talos.git
 GIT_REPO_DUMMY=https://x-access-token:nono-dummy@github.com/Redna/talos.git
-GIT_BRANCH=talos_seed
+# The agent works on the 'talos' branch directly — there is no
+# 'experiment' or 'volatile' branch. The seed is the working branch.
+GIT_BRANCH=talos
 
 git config --global --add safe.directory '*'
 git config --system --add safe.directory '*' 2>/dev/null || true
@@ -57,17 +59,14 @@ if [ -d /usr/local/share/ca-certificates/sentinel ]; then
     fi
 fi
 
-# Derive the volatile branch name from the seed (defaults to experiment)
-VOLATILE_BRANCH=${VOLATILE_BRANCH:-experiment}
-
 if [ -d /app/.git ] && [ "${FORCE_FRESH_CLONE:-0}" != "1" ]; then
     echo "[Entrypoint] Existing repo found, preserving state..."
     cd /app
     # Always replace the remote URL with the dummy token so the Cortex
     # never sees a real credential in `git remote get-url origin`.
     git remote set-url origin "$GIT_REPO_DUMMY" 2>/dev/null || true
-    # Ensure the user has the latest remote state for the experiment branch
-    sudo -u "$USER_NAME" -H git fetch origin "$VOLATILE_BRANCH" 2>/dev/null || true
+    # Ensure the talos branch is up to date
+    sudo -u "$USER_NAME" -H git fetch origin "$GIT_BRANCH" 2>/dev/null || true
 else
     echo "[Entrypoint] Fresh volume or FORCE_FRESH_CLONE=1, (re)cloning repo..."
     rm -rf /app/.[!.]* /app/* 2>/dev/null
@@ -76,15 +75,9 @@ else
     # Replace the real-token URL with dummy so the Cortex never sees it.
     # Subsequent pushes go through the nono proxy which injects the real token.
     git remote set-url origin "$GIT_REPO_DUMMY"
-    echo "[Entrypoint] Creating new volatile branch: $VOLATILE_BRANCH from seed"
-    # Create the branch and set up upstream tracking immediately
-    git checkout -b "$VOLATILE_BRANCH"
-    git fetch origin "$VOLATILE_BRANCH" 2>/dev/null || true
-    if git rev-parse --verify "origin/$VOLATILE_BRANCH" > /dev/null 2>&1; then
-        echo "[Entrypoint] Remote $VOLATILE_BRANCH found, syncing..."
-        git reset --hard "origin/$VOLATILE_BRANCH"
-        git branch --set-upstream-to="origin/$VOLATILE_BRANCH" "$VOLATILE_BRANCH"
-    fi
+    echo "[Entrypoint] Working on the 'talos' branch (no volatile fork)"
+    # Track the remote so the agent can pull updates
+    git branch --set-upstream-to="origin/$GIT_BRANCH" "$GIT_BRANCH" 2>/dev/null || true
 fi
 
 echo "[Entrypoint] Branch: $(git -C /app rev-parse --abbrev-ref HEAD)"
