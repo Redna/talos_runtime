@@ -138,16 +138,17 @@ def test_cortex_spine_client_connects():
 def test_cortex_tool_registration():
     """Test that the Cortex can register all tools and generate schemas.
 
-    Note: this test reflects the current tool set (executive, file_ops,
-    physical, kernels, plugins.delegation). Earlier versions of the
-    Cortex had separate code_surgery, memory, and git_operations modules
-    — those have been consolidated.
+    Note: this test reflects the current *clean* tool set: executive,
+    file_ops, physical, plus the optional plugins.delegation. The
+    agent-built kernels.py module is intentionally absent from the
+    clean seed (the agent will recreate it under P2 Self-Creation).
+    Earlier deleted modules: code_surgery, memory, git_operations,
+    and (now) kernels.
     """
     from tool_registry import ToolRegistry
     from tools.executive import register_executive_tools
     from tools.file_ops import register_file_ops_tools
     from tools.physical import register_physical_tools
-    from kernels import register_kernels
     from state import AgentState
     from pathlib import Path
 
@@ -166,7 +167,6 @@ def test_cortex_tool_registration():
     register_executive_tools(registry, client, state)
     register_file_ops_tools(registry, client)
     register_physical_tools(registry, client)
-    register_kernels(registry, client)
     # Optional: plugins.delegation may not exist in every checkpoint
     try:
         from plugins.delegation import register_delegation_tools

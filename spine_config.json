@@ -5,6 +5,11 @@
   "identity_path": "/app/identity.md",
   "app_dir": "/app",
   "socket_path": "/tmp/spine.sock",
+  "gate_url": "http://gate:4000/v1/chat/completions",
   "context_threshold_pct": 0.85,
-  "gate_url": "http://gate:4000/v1/chat/completions"
+  "fold_advisory_pct": 0.60,
+  "fold_forced_pct": 0.75,
+  "fold_emergency_pct": 0.85,
+  "stall_timeout": 300.0,
+  "nono_enabled": true
 }
