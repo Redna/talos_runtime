@@ -1,5 +1,11 @@
 services:
+  # Profiles let one compose file serve both production and dry-run.
+  # By default (no --profile) only `talos` + `gate` + `xray` start.
+  # - --profile production  → also start sentinel + ollama_proxy
+  # - --profile dryrun      → start gate-dryrun instead of gate
+  #                           and use a scripted LLM script
   sentinel:
+    profiles: ["production"]
     build:
       context: ./sentinel
     container_name: talos_sentinel
@@ -65,6 +71,13 @@ services:
       - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN:-}
       - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID:-0}
       - MEMORY_DIR=/app/memory
+      - GATE_URL=${GATE_URL:-http://gate:4000/v1/chat/completions}
+      - STALL_TIMEOUT=${STALL_TIMEOUT:-300.0}
+      - TALOS_DRYRUN_MODE=${TALOS_DRYRUN_MODE:-}
+      - TALOS_DRYRUN_CRASH_AT_TURN=${TALOS_DRYRUN_CRASH_AT_TURN:-6}
+      - TALOS_DRYRUN_CRASH_REASON=${TALOS_DRYRUN_CRASH_REASON:-simulated crash from dry-run}
+      - TALOS_DRYRUN_STALL_AT_TURN=${TALOS_DRYRUN_STALL_AT_TURN:-4}
+      - TALOS_DRYRUN_STALL_SLEEP=${TALOS_DRYRUN_STALL_SLEEP:-10000}
       - http_proxy=http://172.21.0.2:8080
       - https_proxy=http://172.21.0.2:8080
       - all_proxy=http://172.21.0.2:8080
@@ -81,8 +94,13 @@ services:
     depends_on:
       sentinel:
         condition: service_healthy
+        required: false
       gate:
         condition: service_healthy
+        required: false
+      gate-dryrun:
+        condition: service_healthy
+        required: false
 
   gate:
     build:
@@ -126,6 +144,7 @@ services:
     depends_on:
       sentinel:
         condition: service_healthy
+        required: false
 
   xray:
     build:
@@ -151,11 +170,43 @@ services:
       - talos_external
 
   ollama_proxy:
+    profiles: ["production"]
     image: alpine/socat
     container_name: talos_ollama_proxy
     network_mode: host
     command: TCP-LISTEN:11435,fork,reuseaddr TCP:127.0.0.1:11434
     restart: always
+
+  # Dry-run variant of the LLM gate.  Activated with
+  #   docker compose --profile dryrun up
+  # It serves the same OpenAI-shaped /v1/chat/completions endpoint
+  # the production gate serves, but the responses come from a
+  # deterministic script (see gate/dryrun_script_*.json).  Same
+  # Dockerfile — the entrypoint dispatches on DRYRUN_MODE=1.
+  gate-dryrun:
+    profiles: ["dryrun"]
+    build:
+      context: ./gate
+      dockerfile: Dockerfile
+    container_name: talos_gate_dryrun
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    ports:
+      - "4000:4000"
+    environment:
+      - DRYRUN_MODE=1
+      - DRYRUN_SCENARIO=${DRYRUN_SCENARIO:-happy}
+      - DRYRUN_LOG=/gate/dryrun_log.jsonl
+    volumes:
+      - talos_app:/app:rw
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:4000/healthz')"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+    networks:
+      talos_internal:
 
 networks:
   talos_internal:

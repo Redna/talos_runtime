@@ -507,8 +507,60 @@ def run_daemon(fresh=False):
         HEALTH_FILE.write_text(json.dumps({"status": "running", "phase": "restarting", "consecutive_failures": compose_failures, "ts": time.time()}))
         time.sleep(5)
 
-def start(fresh=False):
+def start(fresh=False, dry_run=False, scenario="happy", cycles=None,
+          crash_after=None, stall_after=None, stall_timeout=15.0, timeout=900,
+          keep=False):
+    """Start the Talos runtime.
+
+    In production mode (``dry_run=False``) this launches the
+    watchdog, which in turn starts Sentinel → Ollama proxy → Gate →
+    X-ray → Talos.  The watchdog supervises the cortex and
+    auto-restarts on crash.
+
+    In dry-run mode (``dry_run=True``) this swaps the production
+    Gate for the scripted dryrun gate (DRYRUN_MODE=1), excludes
+    Sentinel and the Ollama proxy via Docker profiles, and stops
+    the run either when *cycles* cortex.tool_result events have
+    been observed, when the scenario script runs out, or after
+    *timeout* wall-clock seconds.  At the end we print a
+    metrics summary table.
+
+    Parameters
+    ----------
+    fresh:
+        Force a fresh clone of the talos repo from the seed.
+    dry_run:
+        Opt into dry-run mode.  Replaces ``talosctl dry-run``.
+    scenario:
+        happy | crash | stall.  Selects the gate response script
+        and the cortex's TALOS_DRYRUN_MODE.
+    cycles:
+        Stop after N completed cycles (default: run until the
+        scenario script is exhausted or *timeout* fires).
+    crash_after:
+        [crash] Override the turn at which the cortex calls
+        request_restart.  Useful for fuzzing.
+    stall_after:
+        [stall] Override the turn at which the cortex calls
+        reflect(sleep=10000).  Useful for fuzzing.
+    stall_timeout:
+        Spine's stall_timeout in seconds.  Default 15s for
+        dry-run (production is 300s) so a single stall-detection
+        cycle completes quickly.
+    timeout:
+        Hard wall-clock cap in seconds (default 900 = 15 min).
+    keep:
+        Do not tear down the dry-run containers on exit.
+    """
     ensure_run_dir()
+    if dry_run:
+        _start_dryrun(
+            scenario=scenario, cycles=cycles, crash_after=crash_after,
+            stall_after=stall_after, stall_timeout=stall_timeout,
+            timeout=timeout, keep=keep,
+        )
+        return
+
     if PID_FILE.exists():
         pid = int(PID_FILE.read_text())
         try:
@@ -531,7 +583,7 @@ def start(fresh=False):
     daemon_args = [sys.executable, "-u", __file__, "daemon"]
     if fresh:
         daemon_args.append("--fresh")
-    
+
     proc = subprocess.Popen(daemon_args, stdout=log_f, stderr=subprocess.STDOUT, cwd=str(RUNTIME_DIR), start_new_session=True)
     PID_FILE.write_text(str(proc.pid))
 
@@ -823,44 +875,23 @@ def reset(hard=False, preserve=False):
     print("[talosctl] Reset complete. Agent started from turn 0.")
 
 
-def dry_run(scenario="happy", cycles=None, stall_after=None, crash_after=None,
-            stall_timeout=15, timeout=900, keep=False):
-    """Run the scripted dry-run harness.
+def _start_dryrun(scenario="happy", cycles=None, crash_after=None,
+                  stall_after=None, stall_timeout=15.0, timeout=900,
+                  keep=False):
+    """Inner implementation of ``start --dry-run ...``.
 
-    The dry-run is a fully scripted Spine-Cortex run with the real
-    LLM gate replaced by a deterministic response script.  We use
-    the same Docker image and the same nono binary the production
-    system uses, so what the harness exercises is *exactly* the
-    production code path.
+    The dry-run reuses the single ``docker-compose.yml`` (no
+    separate file), activating the ``dryrun`` profile so the
+    production Gate is replaced by the scripted ``gate-dryrun``
+    service and Sentinel / Ollama proxy are excluded.
 
-    Parameters
-    ----------
-    scenario:
-        happy | crash | stall.  Selects the gate response script
-        *and* the cortex's TALOS_DRYRUN_MODE.
-    cycles:
-        Maximum wall-clock seconds the dry-run is allowed to run.
-        The actual number of cycles completed depends on the gate's
-        per-second throughput.  Defaults to 900 (15 min).
-    stall_after:
-        Override the turn at which the stall scenario calls
-        ``reflect(sleep_duration=10000)``.  Useful for fuzzing.
-    crash_after:
-        Override the turn at which the crash scenario calls
-        ``request_restart``.  Useful for fuzzing.
-    stall_timeout:
-        Override the spine's stall_timeout (seconds).  The dry-run
-        uses a much smaller value (15s default) so a single
-        stall-detection cycle completes quickly.
-    timeout:
-        Hard upper bound in seconds — we kill the containers
-        after this even if they look healthy.
-    keep:
-        Do not tear down the containers on exit.  Useful for
-        post-mortem inspection.
+    The compose is run with ``--abort-on-container-exit`` so the
+    gate's exit alone is enough to stop the run when the scenario
+    script is exhausted.  We additionally count
+    ``cortex.tool_result`` events in the live stdout so ``--cycles``
+    is honoured.  When the run ends, we read the spine event log
+    out of the volume and print a metrics summary.
     """
-    ensure_run_dir()
-
     if scenario not in ("happy", "crash", "stall"):
         print(f"[talosctl] Unknown scenario: {scenario!r}", file=sys.stderr)
         sys.exit(2)
@@ -868,31 +899,34 @@ def dry_run(scenario="happy", cycles=None, stall_after=None, crash_after=None,
     # Build the env-file content the compose file consumes.
     env_lines = [
         f"DRYRUN_SCENARIO={scenario}",
-        f"TALOS_STALL_TIMEOUT={stall_timeout}",
+        f"GATE_URL=http://gate-dryrun:4000/v1/chat/completions",
+        f"STALL_TIMEOUT={stall_timeout}",
+        f"TALOS_DRYRUN_MODE={scenario}",
     ]
     if stall_after is not None:
-        env_lines.append(f"DRYRUN_STALL_AT_TURN={stall_after}")
         env_lines.append(f"TALOS_DRYRUN_STALL_AT_TURN={stall_after}")
     if crash_after is not None:
-        env_lines.append(f"DRYRUN_CRASH_AT_TURN={crash_after}")
         env_lines.append(f"TALOS_DRYRUN_CRASH_AT_TURN={crash_after}")
 
     env_file = RUNTIME_DIR / "dryrun.env"
     env_file.write_text("\n".join(env_lines) + "\n")
 
     # Wipe the spine observability volume so the metrics start clean.
+    # With the unified compose, the volume is just the production
+    # name (no talos_dryrun_ prefix).
     print("[talosctl] Resetting dry-run volumes...")
-    for vol_name in ("talos_dryrun_spine_observability", "talos_dryrun_talos_app"):
+    for vol_name in ("talos_spine_observability", "talos_talos_app"):
         subprocess.run(
             f"docker volume rm -f {vol_name}",
             shell=True, cwd=str(RUNTIME_DIR), capture_output=True,
         )
 
+    compose_args = get_compose_args()
     print(f"[talosctl] Starting dry-run (scenario={scenario}, "
           f"stall_timeout={stall_timeout}s, timeout={timeout}s)...")
 
     compose_cmd = (
-        f"docker compose -f docker-compose.dryrun.yml "
+        f"docker compose {compose_args} --profile dryrun "
         f"--env-file {env_file} up --abort-on-container-exit "
         f"--timeout {timeout}"
     )
@@ -907,9 +941,7 @@ def dry_run(scenario="happy", cycles=None, stall_after=None, crash_after=None,
     try:
         for line in up.stdout:
             print(line, end="")
-            # Heuristic: when the cortex has completed at least
-            # N cycles AND the scenario is satisfied, stop.
-            if _dryrun_should_stop(scenario, line, start, cycles):
+            if _dryrun_should_stop(line, cycles, start):
                 print("[talosctl] Stop condition met. Tearing down...")
                 break
             if time.time() - start > timeout:
@@ -925,34 +957,36 @@ def dry_run(scenario="happy", cycles=None, stall_after=None, crash_after=None,
             up.kill()
         if not keep:
             subprocess.run(
-                "docker compose -f docker-compose.dryrun.yml down -v",
+                f"docker compose {compose_args} --profile dryrun down -v",
                 shell=True, cwd=str(RUNTIME_DIR), capture_output=True,
             )
         else:
             print("[talosctl] --keep specified; containers left running.")
 
     # Print the final summary table by reading the spine event log
-    # out of the volume.  We delegate the formatting to a thin
-    # in-process import — the metrics module is plain stdlib so we
-    # do not need to be inside the container.
+    # out of the volume.
     _print_dryrun_summary(scenario)
 
 
-def _dryrun_should_stop(scenario, line, start, cycles):
+# Module-level counter so _dryrun_should_stop can update it.
+_dryrun_cycle_count = 0
+
+
+def _dryrun_should_stop(line, cycles, start):
     """Decide whether the dry-run has met its stop condition.
 
-    The compose is run with --abort-on-container-exit so the gate's
-    exit alone is enough to stop the run when the scenario script
-    is exhausted.  This helper exists so the host CLI can also
-    stop early when *cycles* is reached.
+    Returns True once *cycles* ``cortex.tool_result`` events have
+    been observed in the live stdout.  When *cycles* is None, this
+    always returns False (the run terminates via
+    ``--abort-on-container-exit`` or the wall-clock timeout).
     """
+    global _dryrun_cycle_count
     if cycles is None:
         return False
-    # Each successful tool_result corresponds to one completed cycle.
     if "cortex.tool_result" in line and "duration_ms" in line:
-        # Cheap proxy: count occurrences in the live stdout.
-        # (We are not the source of truth — the metrics JSON is.)
-        pass
+        _dryrun_cycle_count += 1
+        if _dryrun_cycle_count >= cycles:
+            return True
     return False
 
 
@@ -967,21 +1001,17 @@ def _print_dryrun_summary(scenario):
     print(f"  DRY-RUN SUMMARY ({scenario})")
     print("=" * 60)
     try:
-        # The container writes to /spine/events/*.jsonl.  We can
-        # ``docker cp`` the directory out of the (now-stopped)
-        # container if the volume still exists, but the simpler
-        # path is to call the metrics module against the host-side
-        # copy.  The dryrun compose mounts a named volume, so we
-        # look under the docker-managed path.
+        # The container writes to /spine/events/*.jsonl.  Try the
+        # host-side mirror first (the volume is mounted at
+        # /var/lib/docker/volumes/... on a Linux docker host) and
+        # fall back to docker-cp if that path is empty.
         metrics_mod = _import_metrics_module()
-        # Best-effort: try the host-side mirror first, then fall back
-        # to a docker-cp extraction.
         candidates = [
             RUNTIME_DIR / "spine" / "events",
-            Path("/var/lib/docker/volumes/talos_dryrun_spine_observability/_data/events"),
+            Path("/var/lib/docker/volumes/talos_spine_observability/_data/events"),
         ]
         for c in candidates:
-            if c.exists():
+            if c.exists() and any(c.glob("*.jsonl")):
                 m = metrics_mod.collect_from_event_log(c)
                 m.scenario = scenario
                 print(m.summary_table())
@@ -1016,8 +1046,46 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(prog="talosctl")
     subparsers = parser.add_subparsers(dest="command")
 
-    start_parser = subparsers.add_parser("start")
+    start_parser = subparsers.add_parser("start", help="Start the talos runtime (production or dry-run)")
     start_parser.add_argument("--fresh", action="store_true", help="Force a fresh clone of the talos repo from seed")
+    start_parser.add_argument(
+        "--dry-run", dest="dry_run", action="store_true",
+        help="Run the scripted dry-run harness: replaces the production LLM "
+             "gate with the deterministic gate-dryrun service via the "
+             "'dryrun' Docker profile. Same Spine + Cortex + nono path.",
+    )
+    start_parser.add_argument(
+        "--scenario", choices=["happy", "crash", "stall"], default="happy",
+        help="[--dry-run] Which scenario script the gate plays back. Default: happy",
+    )
+    start_parser.add_argument(
+        "--cycles", type=int, default=None,
+        help="[--dry-run] Stop after N completed cycles. Default: run until "
+             "the scenario script is exhausted or the wall-clock timeout fires.",
+    )
+    start_parser.add_argument(
+        "--crash-after", type=int, default=None,
+        help="[--dry-run --scenario=crash] Tell the cortex to call "
+             "request_restart on this turn.",
+    )
+    start_parser.add_argument(
+        "--stall-after", type=int, default=None,
+        help="[--dry-run --scenario=stall] Tell the cortex to call "
+             "reflect(sleep=10000) on this turn.",
+    )
+    start_parser.add_argument(
+        "--stall-timeout", type=float, default=15.0,
+        help="[--dry-run] Spine's stall_timeout in seconds. Default: 15 "
+             "(production is 300).",
+    )
+    start_parser.add_argument(
+        "--timeout", type=int, default=900,
+        help="[--dry-run] Hard wall-clock cap in seconds. Default: 900 (15 min).",
+    )
+    start_parser.add_argument(
+        "--keep", action="store_true",
+        help="[--dry-run] Leave the dry-run containers running after the scenario ends.",
+    )
     subparsers.add_parser("stop")
     subparsers.add_parser("logs")
     subparsers.add_parser("monitor")
@@ -1036,42 +1104,6 @@ if __name__ == "__main__":
     reset_parser.add_argument("--hard", action="store_true", help="Also wipe ./memory/")
     reset_parser.add_argument("--preserve", action="store_true", help="Preserve ./memory/ even if non-empty")
 
-    dryrun_parser = subparsers.add_parser(
-        "dry-run",
-        help="Run a scripted dry-run of the Spine-Cortex architecture. "
-             "Replaces the LLM gate with a deterministic script so the "
-             "real Spine + Cortex + nono sandbox can be exercised at speed.",
-    )
-    dryrun_parser.add_argument(
-        "--scenario", choices=["happy", "crash", "stall"], default="happy",
-        help="Which scenario script the gate plays back. Default: happy",
-    )
-    dryrun_parser.add_argument(
-        "--cycles", type=int, default=None,
-        help="Stop after N completed cycles. Default: run until the "
-             "compose's --abort-on-container-exit fires.",
-    )
-    dryrun_parser.add_argument(
-        "--crash-after", type=int, default=None,
-        help="[crash] Tell the cortex to call request_restart on this turn.",
-    )
-    dryrun_parser.add_argument(
-        "--stall-after", type=int, default=None,
-        help="[stall] Tell the cortex to call reflect(sleep=10000) on this turn.",
-    )
-    dryrun_parser.add_argument(
-        "--stall-timeout", type=float, default=15.0,
-        help="Spine's stall_timeout in seconds. Default: 15 (production is 300).",
-    )
-    dryrun_parser.add_argument(
-        "--timeout", type=int, default=900,
-        help="Hard wall-clock cap in seconds. Default: 900 (15 min).",
-    )
-    dryrun_parser.add_argument(
-        "--keep", action="store_true",
-        help="Leave the dry-run containers running after the scenario ends.",
-    )
-
     args = parser.parse_args()
     if not args.command:
         parser.print_help()
@@ -1083,7 +1115,18 @@ if __name__ == "__main__":
             print(f"\033[92m✓ {status['details']}\033[0m")
         else:
             print(f"\033[93m✗ {status['details']}\033[0m")
-    elif args.command == "start": start(args.fresh)
+    elif args.command == "start":
+        start(
+            fresh=args.fresh,
+            dry_run=args.dry_run,
+            scenario=args.scenario,
+            cycles=args.cycles,
+            crash_after=args.crash_after,
+            stall_after=args.stall_after,
+            stall_timeout=args.stall_timeout,
+            timeout=args.timeout,
+            keep=args.keep,
+        )
     elif args.command == "stop": stop()
     elif args.command == "logs": logs()
     elif args.command == "monitor": monitor()
@@ -1094,13 +1137,3 @@ if __name__ == "__main__":
     elif args.command == "step": step()
     elif args.command == "events": events(args.tail)
     elif args.command == "reset": reset(args.hard, args.preserve)
-    elif args.command == "dry-run":
-        dry_run(
-            scenario=args.scenario,
-            cycles=args.cycles,
-            crash_after=args.crash_after,
-            stall_after=args.stall_after,
-            stall_timeout=args.stall_timeout,
-            timeout=args.timeout,
-            keep=args.keep,
-        )

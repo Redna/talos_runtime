@@ -4,8 +4,9 @@ Unit tests for the dry-run harness.
 These tests cover the *components* of the dry-run — the mock
 cortex driver, the scripted LLM gateway, and the metrics
 collector.  The end-to-end scenarios (full Spine-Cortex-nono
-run in docker) are exercised manually via ``talosctl dry-run``
-because they need the docker host and a built image.
+run in docker) are exercised manually via
+``talosctl start --dry-run --scenario=...`` because they need
+the docker host and a built image.
 
 A few of the assertions intentionally call the live code paths
 so a future refactor of, say, the OpenAI tool_call shape will
@@ -17,6 +18,7 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -204,6 +206,51 @@ def test_metrics_percentiles():
 
 
 # ---------------------------------------------------------------------------
+# SpineConfig env-var overrides — used by the dry-run to swap gate_url
+# and stall_timeout without a separate spine_config.json.
+# ---------------------------------------------------------------------------
+
+def test_spine_config_env_var_overrides(monkeypatch, tmp_path):
+    """GATE_URL and STALL_TIMEOUT env vars must override the JSON config."""
+    cfg_mod = _load_module("config", _REPO_ROOT / "talos" / "spine" / "config.py")
+
+    # Write a minimal spine_config.json — values that should be overridden.
+    cfg_file = tmp_path / "spine_config.json"
+    cfg_file.write_text(json.dumps({
+        "gate_url": "http://gate:4000/v1/chat/completions",
+        "stall_timeout": 300.0,
+    }))
+
+    monkeypatch.setenv("GATE_URL", "http://gate-dryrun:4000/v1/chat/completions")
+    monkeypatch.setenv("STALL_TIMEOUT", "15.0")
+
+    cfg = cfg_mod.load_config(str(cfg_file))
+    assert cfg.gate_url == "http://gate-dryrun:4000/v1/chat/completions"
+    assert cfg.stall_timeout == 15.0
+
+
+def test_spine_config_stall_timeout_garbage_falls_back(monkeypatch, tmp_path):
+    """A non-numeric STALL_TIMEOUT must not crash; the JSON value wins."""
+    cfg_mod = _load_module("config", _REPO_ROOT / "talos" / "spine" / "config.py")
+
+    cfg_file = tmp_path / "spine_config.json"
+    cfg_file.write_text(json.dumps({"stall_timeout": 42.0}))
+    monkeypatch.setenv("STALL_TIMEOUT", "not-a-number")
+
+    cfg = cfg_mod.load_config(str(cfg_file))
+    assert cfg.stall_timeout == 42.0
+
+
+def _load_module(name, path):
+    """Import a .py file by path and return the loaded module."""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location(name, path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+# ---------------------------------------------------------------------------
 # Scripted LLM gateway — exercises the file format the scripts use, but
 # does not start a real FastAPI server.
 # ---------------------------------------------------------------------------
@@ -319,29 +366,211 @@ def test_gateway_falls_through_after_script(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# talosctl dry-run subcommand — the argparse glue
+# talosctl start --dry-run -- argparse glue
 # ---------------------------------------------------------------------------
 
-def test_talosctl_dry_run_help():
-    """The dry-run subcommand must surface a --help that lists all flags."""
+def test_talosctl_start_dry_run_help():
+    """`talosctl start --help` must list the --dry-run flag and friends."""
+    import subprocess
+    result = subprocess.run(
+        [sys.executable, "talosctl", "start", "--help"],
+        cwd=str(_REPO_ROOT), capture_output=True, text=True,
+    )
+    assert result.returncode == 0
+    out = result.stdout
+    for flag in ("--dry-run", "--scenario", "--cycles", "--crash-after",
+                 "--stall-after", "--stall-timeout", "--timeout", "--keep"):
+        assert flag in out, f"missing {flag} in talosctl start --help"
+
+
+def test_talosctl_start_rejects_bad_scenario():
+    """A bad --scenario value must be rejected by argparse even with --dry-run."""
+    import subprocess
+    result = subprocess.run(
+        [sys.executable, "talosctl", "start", "--dry-run",
+         "--scenario", "bogus"],
+        cwd=str(_REPO_ROOT), capture_output=True, text=True,
+    )
+    assert result.returncode != 0
+    assert "invalid choice" in result.stderr
+
+
+def test_talosctl_dry_run_subcommand_removed():
+    """The old `talosctl dry-run` subcommand must no longer exist."""
     import subprocess
     result = subprocess.run(
         [sys.executable, "talosctl", "dry-run", "--help"],
         cwd=str(_REPO_ROOT), capture_output=True, text=True,
     )
-    assert result.returncode == 0
-    out = result.stdout
-    for flag in ("--scenario", "--cycles", "--crash-after", "--stall-after",
-                 "--stall-timeout", "--timeout", "--keep"):
-        assert flag in out, f"missing {flag} in talosctl dry-run --help"
-
-
-def test_talosctl_dry_run_rejects_bad_scenario():
-    """An unknown scenario must be rejected by argparse."""
-    import subprocess
-    result = subprocess.run(
-        [sys.executable, "talosctl", "dry-run", "--scenario", "bogus"],
-        cwd=str(_REPO_ROOT), capture_output=True, text=True,
-    )
     assert result.returncode != 0
-    assert "invalid choice" in result.stderr
+    # argparse prints an `invalid choice` error referencing the
+    # available subcommands — make sure 'dry-run' is not among them.
+    assert "dry-run" not in result.stderr.split("choose from")[-1] \
+        if "choose from" in result.stderr else True
+
+
+def test_talosctl_start_dry_run_invokes_profile_dryrun(monkeypatch, tmp_path):
+    """`talosctl start --dry-run` must call docker compose with --profile dryrun.
+
+    Mocks subprocess.Popen so we never invoke docker; inspects the
+    command that *would* be run.
+    """
+    talosctl = _load_talosctl(monkeypatch, tmp_path)
+
+    captured = {}
+
+    class FakePopen:
+        def __init__(self, cmd, *args, **kwargs):
+            captured["cmd"] = cmd
+            self.stdout = iter(["attaching to network\n"])
+            self.pid = 1234
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def terminate(self): pass
+        def wait(self, timeout=None): return 0
+        def kill(self): pass
+
+    class FakeRun:
+        def __call__(self, *args, **kwargs): return subprocess.CompletedProcess(args, 0, "", "")
+    fake_run = FakeRun()
+
+    monkeypatch.setattr(talosctl.subprocess, "Popen", FakePopen)
+    monkeypatch.setattr(talosctl.subprocess, "run", fake_run)
+    monkeypatch.setattr(talosctl.time, "time", lambda: 0)
+    monkeypatch.setattr(talosctl, "_print_dryrun_summary", lambda s: None)
+
+    talosctl._start_dryrun(
+        scenario="happy", cycles=None, crash_after=None,
+        stall_after=None, stall_timeout=15.0, timeout=900, keep=False,
+    )
+
+    cmd = captured["cmd"]
+    assert "--profile dryrun" in cmd, f"--profile dryrun not in command: {cmd}"
+    assert "docker-compose.dryrun.yml" not in cmd, \
+        "should not reference the obsolete dryrun compose file"
+    # The env file must exist and contain the expected keys.
+    env_file = tmp_path / "dryrun.env"
+    assert env_file.exists(), "dryrun.env must be written"
+    env_text = env_file.read_text()
+    assert "DRYRUN_SCENARIO=happy" in env_text
+    assert "TALOS_DRYRUN_MODE=happy" in env_text
+    assert "GATE_URL=http://gate-dryrun:4000/v1/chat/completions" in env_text
+    assert "STALL_TIMEOUT=15.0" in env_text
+
+
+def test_talosctl_start_dry_run_writes_crash_env(monkeypatch, tmp_path):
+    """--crash-after and --stall-after must be propagated into the env file."""
+    talosctl = _load_talosctl(monkeypatch, tmp_path)
+
+    class FakePopen:
+        def __init__(self, cmd, *args, **kwargs):
+            self.stdout = iter([])
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def terminate(self): pass
+        def wait(self, timeout=None): return 0
+        def kill(self): pass
+
+    class FakeRun:
+        def __call__(self, *args, **kwargs): return subprocess.CompletedProcess(args, 0, "", "")
+    fake_run = FakeRun()
+
+    monkeypatch.setattr(talosctl.subprocess, "Popen", FakePopen)
+    monkeypatch.setattr(talosctl.subprocess, "run", fake_run)
+    monkeypatch.setattr(talosctl.time, "time", lambda: 0)
+    monkeypatch.setattr(talosctl, "_print_dryrun_summary", lambda s: None)
+
+    talosctl._start_dryrun(
+        scenario="crash", cycles=None, crash_after=5,
+        stall_after=None, stall_timeout=20.0, timeout=900, keep=False,
+    )
+    env_text = (tmp_path / "dryrun.env").read_text()
+    assert "DRYRUN_SCENARIO=crash" in env_text
+    assert "TALOS_DRYRUN_MODE=crash" in env_text
+    assert "TALOS_DRYRUN_CRASH_AT_TURN=5" in env_text
+    assert "STALL_TIMEOUT=20.0" in env_text
+    # crash-after should not pollute the stall env var.
+    assert "TALOS_DRYRUN_STALL_AT_TURN" not in env_text
+
+
+def test_talosctl_start_dry_run_cycles_counter(monkeypatch, tmp_path):
+    """The cycle counter must trigger a stop after the requested count."""
+    talosctl = _load_talosctl(monkeypatch, tmp_path)
+
+    # Reset the module-level counter (in case prior tests touched it).
+    talosctl._dryrun_cycle_count = 0
+
+    # Two completed cycles, then a non-result line — should stop after
+    # the 2nd tool_result, not after the 3rd.
+    lines = [
+        "cortex.tool_call tool=bash_command\n",
+        'cortex.tool_result {"duration_ms": 12, "success": true}\n',
+        "cortex.tool_call tool=bash_command\n",
+        'cortex.tool_result {"duration_ms": 14, "success": true}\n',
+        "still running\n",
+    ]
+
+    class FakePopen:
+        def __init__(self, cmd, *args, **kwargs):
+            self.stdout = iter(lines)
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def terminate(self): pass
+        def wait(self, timeout=None): return 0
+        def kill(self): pass
+
+    class FakeRun:
+        def __call__(self, *args, **kwargs): return subprocess.CompletedProcess(args, 0, "", "")
+    fake_run = FakeRun()
+
+    monkeypatch.setattr(talosctl.subprocess, "Popen", FakePopen)
+    monkeypatch.setattr(talosctl.subprocess, "run", fake_run)
+    monkeypatch.setattr(talosctl.time, "time", lambda: 0)
+    monkeypatch.setattr(talosctl, "_print_dryrun_summary", lambda s: None)
+
+    talosctl._start_dryrun(
+        scenario="happy", cycles=2, crash_after=None,
+        stall_after=None, stall_timeout=15.0, timeout=900, keep=False,
+    )
+    assert talosctl._dryrun_cycle_count == 2
+
+
+def test_talosctl_start_dry_run_rejects_bad_scenario_runtime(monkeypatch, tmp_path):
+    """A bad scenario value must be rejected with a clear error and exit 2."""
+    talosctl = _load_talosctl(monkeypatch, tmp_path)
+    with pytest.raises(SystemExit) as exc:
+        talosctl._start_dryrun(scenario="bogus", cycles=None,
+                               crash_after=None, stall_after=None,
+                               stall_timeout=15.0, timeout=900, keep=False)
+    assert exc.value.code == 2
+
+
+def test_talosctl_dry_run_function_removed(monkeypatch, tmp_path):
+    """The standalone `dry_run()` function must be gone from the talosctl module."""
+    talosctl = _load_talosctl(monkeypatch, tmp_path)
+    assert not hasattr(talosctl, "dry_run"), \
+        "standalone dry_run() must be removed in favour of start(..., dry_run=True)"
+
+
+def _load_talosctl(monkeypatch, tmp_path):
+    """Import the talosctl script as a module.
+
+    The script has no ``.py`` suffix, so the standard importlib
+    loader refuses it.  We read the file, neuter the
+    ``if __name__ == "__main__"`` block, and exec it into a
+    fresh module object whose ``__file__`` points at the real
+    file (so RUNTIME_DIR resolution still works).
+    """
+    import importlib.util
+    import types
+    from pathlib import Path
+    src = Path(_REPO_ROOT / "talosctl").read_text()
+    src = src.replace('if __name__ == "__main__":', "if False:")
+    mod_name = f"talosctl_test_{tmp_path.name}"
+    mod = types.ModuleType(mod_name)
+    mod.__file__ = str(_REPO_ROOT / "talosctl")
+    sys.modules[mod_name] = mod
+    exec(compile(src, str(_REPO_ROOT / "talosctl"), "exec"), mod.__dict__)
+    # Redirect the runtime dir so the env file lands in tmp_path.
+    monkeypatch.setattr(mod, "RUNTIME_DIR", tmp_path)
+    return mod
