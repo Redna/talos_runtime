@@ -1,6 +1,12 @@
 #!/bin/bash
 set -e
 
+# DRYRUN_MODE=1 selects the scripted dry-run gate instead of the real one.
+# The scenario is driven by DRYRUN_SCENARIO (happy | crash | stall).
+if [ "${DRYRUN_MODE:-0}" = "1" ]; then
+    exec ./dryrun_entrypoint.sh
+fi
+
 # Wait for and install Sentinel Root CA if available
 if [ -d /usr/local/share/ca-certificates/sentinel ]; then
     echo "[Gate Entrypoint] Installing Sentinel Root CA..."

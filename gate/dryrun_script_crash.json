@@ -1,0 +1,144 @@
+{
+  "_comment": "Crash scenario. The first 5 turns are normal bash_command tool calls. The 6th turn tells the cortex to call request_restart('simulated crash from dry-run') — the cortex exits cleanly with code 0 but the supervisor sees the process exit and counts a failure. After 3 such exits the Lazarus protocol would trigger. The spine is expected to restart the cortex after each exit (NOT revert to last_good_commit on the first one — only on the 3rd consecutive failure).",
+  "scenario": "crash",
+  "responses": [
+    {
+      "id": "crash-001",
+      "object": "chat.completion",
+      "created": 1700000000,
+      "model": "dryrun-scripted",
+      "choices": [{
+        "index": 0,
+        "message": {
+          "role": "assistant",
+          "content": "dry-run cycle 1",
+          "tool_calls": [{
+            "id": "call_0001",
+            "type": "function",
+            "function": {
+              "name": "bash_command",
+              "arguments": "{\"command\": \"echo 'dry-run cycle 1'\"}"
+            }
+          }]
+        },
+        "finish_reason": "tool_call"
+      }],
+      "usage": {"prompt_tokens": 100, "completion_tokens": 25, "total_tokens": 125, "context_pct": 0.0}
+    },
+    {
+      "id": "crash-002",
+      "object": "chat.completion",
+      "created": 1700000000,
+      "model": "dryrun-scripted",
+      "choices": [{
+        "index": 0,
+        "message": {
+          "role": "assistant",
+          "content": "dry-run cycle 2",
+          "tool_calls": [{
+            "id": "call_0002",
+            "type": "function",
+            "function": {
+              "name": "bash_command",
+              "arguments": "{\"command\": \"echo 'dry-run cycle 2'\"}"
+            }
+          }]
+        },
+        "finish_reason": "tool_call"
+      }],
+      "usage": {"prompt_tokens": 100, "completion_tokens": 25, "total_tokens": 125, "context_pct": 0.0}
+    },
+    {
+      "id": "crash-003",
+      "object": "chat.completion",
+      "created": 1700000000,
+      "model": "dryrun-scripted",
+      "choices": [{
+        "index": 0,
+        "message": {
+          "role": "assistant",
+          "content": "dry-run cycle 3",
+          "tool_calls": [{
+            "id": "call_0003",
+            "type": "function",
+            "function": {
+              "name": "bash_command",
+              "arguments": "{\"command\": \"echo 'dry-run cycle 3'\"}"
+            }
+          }]
+        },
+        "finish_reason": "tool_call"
+      }],
+      "usage": {"prompt_tokens": 100, "completion_tokens": 25, "total_tokens": 125, "context_pct": 0.0}
+    },
+    {
+      "id": "crash-004",
+      "object": "chat.completion",
+      "created": 1700000000,
+      "model": "dryrun-scripted",
+      "choices": [{
+        "index": 0,
+        "message": {
+          "role": "assistant",
+          "content": "dry-run cycle 4",
+          "tool_calls": [{
+            "id": "call_0004",
+            "type": "function",
+            "function": {
+              "name": "bash_command",
+              "arguments": "{\"command\": \"echo 'dry-run cycle 4'\"}"
+            }
+          }]
+        },
+        "finish_reason": "tool_call"
+      }],
+      "usage": {"prompt_tokens": 100, "completion_tokens": 25, "total_tokens": 125, "context_pct": 0.0}
+    },
+    {
+      "id": "crash-005",
+      "object": "chat.completion",
+      "created": 1700000000,
+      "model": "dryrun-scripted",
+      "choices": [{
+        "index": 0,
+        "message": {
+          "role": "assistant",
+          "content": "dry-run cycle 5",
+          "tool_calls": [{
+            "id": "call_0005",
+            "type": "function",
+            "function": {
+              "name": "bash_command",
+              "arguments": "{\"command\": \"echo 'dry-run cycle 5'\"}"
+            }
+          }]
+        },
+        "finish_reason": "tool_call"
+      }],
+      "usage": {"prompt_tokens": 100, "completion_tokens": 25, "total_tokens": 125, "context_pct": 0.0}
+    },
+    {
+      "id": "crash-006",
+      "object": "chat.completion",
+      "created": 1700000000,
+      "model": "dryrun-scripted",
+      "choices": [{
+        "index": 0,
+        "message": {
+          "role": "assistant",
+          "content": "Simulating crash: requesting restart and exiting.",
+          "tool_calls": [{
+            "id": "call_0006",
+            "type": "function",
+            "function": {
+              "name": "request_restart",
+              "arguments": "{\"reason\": \"simulated crash from dry-run\"}"
+            }
+          }]
+        },
+        "finish_reason": "tool_call"
+      }],
+      "usage": {"prompt_tokens": 100, "completion_tokens": 25, "total_tokens": 125, "context_pct": 0.0}
+    }
+  ]
+}

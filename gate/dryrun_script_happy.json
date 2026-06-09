@@ -1,0 +1,5 @@
+{
+  "_comment": "Happy-path scenario. Every turn returns a single bash_command tool call with an echo of the cycle number. The cortex then receives the result, sends a tool_result back, and the loop continues indefinitely.",
+  "scenario": "happy",
+  "responses": []
+}

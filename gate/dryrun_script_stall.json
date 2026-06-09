@@ -1,0 +1,98 @@
+{
+  "_comment": "Stall scenario. First 3 turns are normal bash_command. The 4th turn tells the cortex to call reflect() with sleep_duration=10000. The cortex goes to sleep forever (until killed). The spine's HealthMonitor should notice no events for stall_timeout seconds and the supervisor should SIGKILL the nono Popen and restart.",
+  "scenario": "stall",
+  "responses": [
+    {
+      "id": "stall-001",
+      "object": "chat.completion",
+      "created": 1700000000,
+      "model": "dryrun-scripted",
+      "choices": [{
+        "index": 0,
+        "message": {
+          "role": "assistant",
+          "content": "dry-run cycle 1",
+          "tool_calls": [{
+            "id": "call_0001",
+            "type": "function",
+            "function": {
+              "name": "bash_command",
+              "arguments": "{\"command\": \"echo 'dry-run cycle 1'\"}"
+            }
+          }]
+        },
+        "finish_reason": "tool_call"
+      }],
+      "usage": {"prompt_tokens": 100, "completion_tokens": 25, "total_tokens": 125, "context_pct": 0.0}
+    },
+    {
+      "id": "stall-002",
+      "object": "chat.completion",
+      "created": 1700000000,
+      "model": "dryrun-scripted",
+      "choices": [{
+        "index": 0,
+        "message": {
+          "role": "assistant",
+          "content": "dry-run cycle 2",
+          "tool_calls": [{
+            "id": "call_0002",
+            "type": "function",
+            "function": {
+              "name": "bash_command",
+              "arguments": "{\"command\": \"echo 'dry-run cycle 2'\"}"
+            }
+          }]
+        },
+        "finish_reason": "tool_call"
+      }],
+      "usage": {"prompt_tokens": 100, "completion_tokens": 25, "total_tokens": 125, "context_pct": 0.0}
+    },
+    {
+      "id": "stall-003",
+      "object": "chat.completion",
+      "created": 1700000000,
+      "model": "dryrun-scripted",
+      "choices": [{
+        "index": 0,
+        "message": {
+          "role": "assistant",
+          "content": "dry-run cycle 3",
+          "tool_calls": [{
+            "id": "call_0003",
+            "type": "function",
+            "function": {
+              "name": "bash_command",
+              "arguments": "{\"command\": \"echo 'dry-run cycle 3'\"}"
+            }
+          }]
+        },
+        "finish_reason": "tool_call"
+      }],
+      "usage": {"prompt_tokens": 100, "completion_tokens": 25, "total_tokens": 125, "context_pct": 0.0}
+    },
+    {
+      "id": "stall-004",
+      "object": "chat.completion",
+      "created": 1700000000,
+      "model": "dryrun-scripted",
+      "choices": [{
+        "index": 0,
+        "message": {
+          "role": "assistant",
+          "content": "Simulating stall: sleeping forever.",
+          "tool_calls": [{
+            "id": "call_0004",
+            "type": "function",
+            "function": {
+              "name": "reflect",
+              "arguments": "{\"status\": \"simulated stall from dry-run\", \"sleep_duration\": 10000}"
+            }
+          }]
+        },
+        "finish_reason": "tool_call"
+      }],
+      "usage": {"prompt_tokens": 100, "completion_tokens": 25, "total_tokens": 125, "context_pct": 0.0}
+    }
+  ]
+}
