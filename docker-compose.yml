@@ -103,6 +103,7 @@ services:
         required: false
 
   gate:
+    profiles: ["production"]
     build:
       context: ./gate
       dockerfile: Dockerfile
@@ -165,6 +166,7 @@ services:
     depends_on:
       gate:
         condition: service_healthy
+        required: false
     networks:
       - talos_internal
       - talos_external

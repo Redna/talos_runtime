@@ -37,14 +37,14 @@ RUN ARCH=$(dpkg --print-architecture) && \
 # Install uv for fast package management
 RUN curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR="/usr/local/bin" sh
 
-# Install nono (kernel-enforced sandboxing) — both the Python bindings and the CLI.
-# The .deb is part of the build context; nono-py comes in via requirements.txt.
-# The Spine orchestrates the Cortex inside the nono sandbox via nono.sandboxed_exec().
+# Install nono (kernel-enforced sandboxing) — the .deb is part of the
+# build context.  The Spine orchestrates the Cortex inside the nono
+# sandbox via the 'nono' CLI (see spine/sandbox.py).  The Python
+# bindings (nono-py) are installed later via requirements.txt.
 COPY talos_runtime/nono-cli_0.61.2_amd64.deb /tmp/nono-cli.deb
 RUN dpkg -i /tmp/nono-cli.deb && \
     rm /tmp/nono-cli.deb && \
-    nono --version && \
-    python3 -c "import nono_py; from nono_py import is_supported, support_info; print('nono-py loaded, supported=', is_supported())"
+    nono --version
 
 # Allow git to work regardless of directory ownership (container runs as different users)
 RUN git config --system --add safe.directory '*'
@@ -64,7 +64,8 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 # 4. Agent sandbox: install pip + make venv writable so Talos can add packages
 RUN uv pip install pip && \
     uv pip install -r requirements.txt && \
-    chmod -R 777 /venv
+    chmod -R 777 /venv && \
+    /venv/bin/python -c "import nono_py; print('nono-py loaded, supported=', nono_py.is_supported())"
 
 # 4a. Preserve pristine spine files (restored on each startup to prevent cortex corruption)
 RUN cp -a /app/spine /spine_backup && \
