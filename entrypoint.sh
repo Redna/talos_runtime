@@ -68,13 +68,25 @@ if [ -d /app/.git ] && [ "${FORCE_FRESH_CLONE:-0}" != "1" ]; then
     # Ensure the talos branch is up to date
     sudo -u "$USER_NAME" -H git fetch origin "$GIT_BRANCH" 2>/dev/null || true
 else
-    echo "[Entrypoint] Fresh volume or FORCE_FRESH_CLONE=1, (re)cloning repo..."
+    echo "[Entrypoint] Fresh volume or FORCE_FRESH_CLONE=1, populating /app..."
     rm -rf /app/.[!.]* /app/* 2>/dev/null
-    git clone -b "$GIT_BRANCH" "$GIT_REPO" /app
-    cd /app
-    # Replace the real-token URL with dummy so the Cortex never sees it.
-    # Subsequent pushes go through the nono proxy which injects the real token.
-    git remote set-url origin "$GIT_REPO_DUMMY"
+    # If a seed is mounted at /app_seed (dry-run mode, or any local
+    # dev setup), copy it into /app instead of cloning. The entrypoint
+    # is silent about clone failures which makes debugging harder than
+    # a loud local-copy failure.
+    if [ -d /app_seed/.git ] || [ -d /app_seed/cortex ] || [ -d /app_seed/spine ]; then
+        echo "[Entrypoint] Using local seed from /app_seed"
+        cp -a /app_seed/. /app/
+        cd /app
+        # Replace the real-token URL with dummy so the Cortex never sees it.
+        git remote set-url origin "$GIT_REPO_DUMMY" 2>/dev/null || true
+    else
+        git clone -b "$GIT_BRANCH" "$GIT_REPO" /app || \
+            { echo "[Entrypoint] ERROR: git clone failed. Set TALOS_DRYRUN_MODE=1 and mount /app_seed for offline dry-runs."; exit 1; }
+        cd /app
+        # Replace the real-token URL with dummy so the Cortex never sees it.
+        git remote set-url origin "$GIT_REPO_DUMMY"
+    fi
     echo "[Entrypoint] Working on the 'talos' branch (no volatile fork)"
     # Track the remote so the agent can pull updates
     git branch --set-upstream-to="origin/$GIT_BRANCH" "$GIT_BRANCH" 2>/dev/null || true

@@ -83,6 +83,15 @@ RUN chmod +x /usr/local/bin/entrypoint.sh
 # 7. Copy Spine configuration
 COPY talos_runtime/spine_config.json /spine/spine_config.json
 
+# 8. Bake the talos source as a dry-run seed.  The entrypoint will
+# detect /app_seed and copy it into /app instead of cloning from
+# GitHub when network is unavailable (e.g. during offline dry-runs
+# or local dev).  This is a fallback; the real production path is
+# the git clone in entrypoint.sh.
+RUN cp -a /app /app_seed && \
+    rm -rf /app_seed/.git/objects /app_seed/.git/logs /app_seed/.git/index.lock 2>/dev/null || true && \
+    chown -R root:root /app_seed
+
 # The entrypoint launches the seed agent directly
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
 # Use absolute path to the persistent venv python

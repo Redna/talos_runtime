@@ -925,10 +925,15 @@ def _start_dryrun(scenario="happy", cycles=None, crash_after=None,
     print(f"[talosctl] Starting dry-run (scenario={scenario}, "
           f"stall_timeout={stall_timeout}s, timeout={timeout}s)...")
 
+    # NOTE: docker compose v5.x 'up' does NOT honour --env-file (the
+    # flag is silently ignored).  We have to source the env file
+    # into the current shell so the 'environment:' interpolation in
+    # the compose file sees the dry-run overrides.  'set -a' marks
+    # subsequently assigned variables for export.
     compose_cmd = (
+        f"set -a && . {env_file} && set +a && "
         f"docker compose {compose_args} --profile dryrun "
-        f"--env-file {env_file} up --abort-on-container-exit "
-        f"--timeout {timeout}"
+        f"up --abort-on-container-exit --timeout {timeout}"
     )
     up = subprocess.Popen(
         compose_cmd,
