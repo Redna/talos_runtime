@@ -908,6 +908,21 @@ def _start_dryrun(scenario="happy", cycles=None, crash_after=None,
     if crash_after is not None:
         env_lines.append(f"TALOS_DRYRUN_CRASH_AT_TURN={crash_after}")
 
+    # Bypass the network proxy for the dryrun gate.  The Spine
+    # inherits http_proxy from the container env; NO_PROXY in the
+    # default compose file does not match 'gate-dryrun', so
+    # curl / urllib would route through the proxy and fail with
+    # ECONNREFUSED in dry-run mode (the proxy itself is not started
+    # under the dryrun profile).
+    _no_proxy = (
+        "gate,talos_gate,gate-dryrun,talos_gate_dryrun,"
+        "xray,talos_xray,sentinel,talos_sentinel,"
+        "localhost,127.0.0.1,host.docker.internal,"
+        "172.16.0.0/12,192.168.0.0/16,10.0.0.0/8"
+    )
+    env_lines.append(f"NO_PROXY={_no_proxy}")
+    env_lines.append(f"no_proxy={_no_proxy}")
+
     env_file = RUNTIME_DIR / "dryrun.env"
     env_file.write_text("\n".join(env_lines) + "\n")
 
@@ -943,6 +958,7 @@ def _start_dryrun(scenario="happy", cycles=None, crash_after=None,
     )
 
     start = time.time()
+    events_dir = None
     try:
         for line in up.stdout:
             print(line, end="")
@@ -955,6 +971,13 @@ def _start_dryrun(scenario="happy", cycles=None, crash_after=None,
     except KeyboardInterrupt:
         print("\n[talosctl] Interrupted by user. Tearing down...")
     finally:
+        # Copy the event log out of the running container BEFORE we
+        # tear it down — the 'down -v' below removes the container
+        # and with it access to /spine/events.  The volume mount at
+        # /var/lib/docker/volumes/... is often permission-denied
+        # for non-root callers, so docker cp is the most reliable
+        # channel.
+        events_dir = _copy_events_from_container("talos_agent")
         try:
             up.terminate()
             up.wait(timeout=10)
@@ -968,9 +991,9 @@ def _start_dryrun(scenario="happy", cycles=None, crash_after=None,
         else:
             print("[talosctl] --keep specified; containers left running.")
 
-    # Print the final summary table by reading the spine event log
-    # out of the volume.
-    _print_dryrun_summary(scenario)
+    # Print the final summary table from the snapshot of events we
+    # captured before the container was torn down.
+    _print_dryrun_summary(scenario, events_dir)
 
 
 # Module-level counter so _dryrun_should_stop can update it.
@@ -995,7 +1018,25 @@ def _dryrun_should_stop(line, cycles, start):
     return False
 
 
-def _print_dryrun_summary(scenario):
+def _copy_events_from_container(container: str) -> Path | None:
+    """Copy /spine/events/ from *container* into a temp dir we own.
+
+    Returns the temp dir if any *.jsonl was copied, else None.  Used
+    by the dry-run summary path so we don't depend on the host-side
+    volume mount (which is often root-only on Linux Docker).
+    """
+    import tempfile
+    tmp = Path(tempfile.mkdtemp(prefix="talos-dryrun-events-"))
+    rc = subprocess.run(
+        ["docker", "cp", f"{container}:/spine/events/.", str(tmp) + "/"],
+        capture_output=True, text=True,
+    )
+    if rc.returncode == 0 and any(tmp.glob("*.jsonl")):
+        return tmp
+    return None
+
+
+def _print_dryrun_summary(scenario, events_dir: Path | None = None):
     """Re-read the spine event log from the volume and print metrics.
 
     The metrics module lives in the talos submodule; we add it to
@@ -1006,26 +1047,22 @@ def _print_dryrun_summary(scenario):
     print(f"  DRY-RUN SUMMARY ({scenario})")
     print("=" * 60)
     try:
-        # The container writes to /spine/events/*.jsonl.  Try the
-        # host-side mirror first (the volume is mounted at
-        # /var/lib/docker/volumes/... on a Linux docker host) and
-        # fall back to docker-cp if that path is empty.
         metrics_mod = _import_metrics_module()
-        candidates = [
-            RUNTIME_DIR / "spine" / "events",
-            Path("/var/lib/docker/volumes/talos_spine_observability/_data/events"),
-        ]
-        for c in candidates:
-            if c.exists() and any(c.glob("*.jsonl")):
-                m = metrics_mod.collect_from_event_log(c)
-                m.scenario = scenario
-                print(m.summary_table())
-                print()
-                json_path = RUNTIME_DIR / "dryrun_metrics.json"
-                metrics_mod.write_metrics(m, json_path)
-                print(f"  metrics JSON: {json_path}")
-                return
-        print("  (no event log found — was the dry-run started?)")
+        if events_dir is None or not any(events_dir.glob("*.jsonl")):
+            # Try the host-side mirror as a fallback.
+            mirror = RUNTIME_DIR / "spine" / "events"
+            if mirror.exists() and any(mirror.glob("*.jsonl")):
+                events_dir = mirror
+        if events_dir is None or not any(events_dir.glob("*.jsonl")):
+            print("  (no event log found — was the dry-run started?)")
+            return
+        m = metrics_mod.collect_from_event_log(events_dir)
+        m.scenario = scenario
+        print(m.summary_table())
+        print()
+        json_path = RUNTIME_DIR / "dryrun_metrics.json"
+        metrics_mod.write_metrics(m, json_path)
+        print(f"  metrics JSON: {json_path}")
     except Exception as e:
         print(f"  failed to read metrics: {e}")
 
@@ -1037,12 +1074,22 @@ def _import_metrics_module():
     import works regardless of cwd.  If the submodule is missing the
     import raises and the caller falls back to a friendly error.
     """
+    import sys
     metrics_path = RUNTIME_DIR / "talos" / "spine" / "metrics.py"
     if not metrics_path.exists():
         raise ImportError(f"metrics module not found at {metrics_path}")
     import importlib.util
-    spec = importlib.util.spec_from_file_location("dryrun_metrics", metrics_path)
+    mod_name = "dryrun_metrics"
+    spec = importlib.util.spec_from_file_location(mod_name, metrics_path)
     mod = importlib.util.module_from_spec(spec)
+    # Register in sys.modules BEFORE exec_module so the dataclass
+    # decorator (and any other 'is this a real module?' introspection)
+    # can resolve sys.modules[<module>.__module__] back to the loaded
+    # module object.  Without this, dataclasses._is_type raises
+    # "'NoneType' object has no attribute '__dict__'" at decoration
+    # time because spec_from_file_location does NOT add the module
+    # to sys.modules.
+    sys.modules[mod_name] = mod
     spec.loader.exec_module(mod)
     return mod
 
